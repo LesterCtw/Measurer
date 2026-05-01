@@ -400,6 +400,48 @@ boundary = profile crossing threshold
 - 比二次微分反曲點更穩定。
 - 比 max gradient 更直觀。
 
+Refined point status：
+
+```text
+refined:
+  找到可靠 local half maximum crossing
+
+fallback_rough:
+  local half maximum crossing 不可靠，使用 rough boundary point 補值
+
+invalid:
+  保留作為內部診斷狀態，但 MVS 不因 refined point invalid 而放棄 boundary
+```
+
+Profile 超出 image / ROI 不一定失敗。只要 inside / outside 兩側仍有足夠 sample，就可以用截短 profile 繼續計算。
+
+MVS 預設：
+
+```text
+inside samples >= 4
+outside samples >= 4
+```
+
+如果不符合，該 boundary point 使用 rough boundary fallback。
+
+若 half maximum 不可靠，例如找不到 crossing、contrast 不足、或亮暗方向不合理：
+
+```text
+status = fallback_rough
+boundary point = rough boundary point
+```
+
+`fallback_rough` 不算 boundary failure。MVS 不使用 `boundary_refinement_failed` 排除 Metal Island。
+
+只要 Metal Island candidate 已通過 area filtering 與 boundary-touch exclusion，就必須產生可量測 boundary：
+
+```text
+成功 refined 的點 → 使用 refined point
+refinement 不可靠的點 → 使用 rough boundary fallback
+```
+
+即使 fallback ratio 很高，也保留該 Metal Island 並進行量測。Debug View 顯示 fallback points，Trace Sheet 記錄 fallback ratio，讓工程師判斷結果可信度。
+
 ## Metal ID 與 Grouping
 
 Metal island ID：
@@ -906,6 +948,42 @@ Debug Image：
 
 - 2x2 debug panel。
 - 顯示 segmentation / boundary / component / pair / measurement debug 資訊。
+
+## 訪談紀錄：2026-05-01
+
+本次 grill-me / grill-with-docs 已定案：
+
+- 第一版 release target 是 Windows 11。
+- Python runtime/build target 是 Python 3.12.8。
+- `.dm3` 讀取先採用 `rosettasciio`。
+- 沒有公司實際影像時，先由程式生成 synthetic images 做 regression tests。
+- Result View 與 Excel 主要 value 都顯示 1 位小數。
+- Export 名詞與輸出位置已統一：
+  - `Result View`：GUI 中原圖 + 量測線 + 數值。
+  - `Result Image`：報告用匯出圖，放 `measured_image/`。
+  - `Debug View`：GUI 中演算法檢查畫面。
+  - `Debug Image`：排錯用匯出圖，放 `debug_image/`。
+  - `Trace Sheet`：Excel 追溯資料 sheet。
+- 單一來源資料夾時，Export 輸出到原圖資料夾。
+- 多來源資料夾時，Export 必須由使用者指定共同 output folder。
+- 多來源資料夾若有同名圖片，Result Image / Debug Image 同名檔案會覆蓋。
+- Refined Boundary 不允許因 local refinement 失敗而讓 metal 失敗。
+- 只要 Metal Island candidate 通過 area filtering 與 boundary-touch exclusion，就必須產生可量測 boundary。
+- Half maximum refinement 成功時使用 refined point。
+- Half maximum refinement 不可靠、sample 不足、或其他局部問題時，使用 rough boundary fallback。
+- `fallback_rough` 不算 failure。
+- 不使用 `boundary_refinement_failed` 排除 Metal Island。
+- 即使 fallback ratio 很高，也保留該 Metal Island 並進行量測。
+- Debug View 顯示 fallback points。
+- Trace Sheet 記錄 fallback ratio。
+
+下次待續問題：
+
+- 如果某顆 Metal Island 幾乎 100% 都使用 rough boundary fallback，Measurements 主表的 status 是否仍然固定為 `success`。
+- Trace Sheet 需要哪些 fallback / refinement summary 欄位。
+- Result Image 文字重疊時的避讓規則。
+- Boundary smoothing / continuous boundary 的 MVS 最小實作方式。
+- GUI Export 覆蓋確認 dialog 要如何呈現單一來源與多來源情境。
 
 ## 後續 TODO
 

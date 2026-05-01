@@ -28,6 +28,10 @@ _Avoid_: sample, measurement group
 The final boundary used for official measurements, derived from local image intensity transition rather than directly from the Otsu contour.
 _Avoid_: Otsu boundary, mask contour
 
+**Rough Boundary Fallback**:
+A local substitute point from the rough boundary used when a refined boundary point cannot be reliably found.
+_Avoid_: final Otsu boundary
+
 **TCD**:
 The maximum horizontal width of a Metal Island within its top 20% height region.
 _Avoid_: top width
@@ -82,6 +86,7 @@ _Avoid_: tag, class, folder
 - An **Analysis Region** is either the full **STEM ZC Image** or the inside of one **ROI**.
 - A **ROI** limits analysis but does not create separate summaries by itself.
 - A **Metal Island** has one **Refined Boundary**.
+- A **Refined Boundary** may contain **Rough Boundary Fallback** points when local refinement is unreliable.
 - A **Metal Island** can produce one **TCD**, one **BCD**, and one **Height**.
 - Adjacent **Metal Islands** in the same row can produce **Horizontal Space**.
 - Adjacent **Metal Islands** in the same column can produce **Vertical Space**.
