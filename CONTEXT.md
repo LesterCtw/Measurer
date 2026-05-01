@@ -52,6 +52,26 @@ _Avoid_: vertical bounding-box gap
 The final line segment whose length becomes one reported measurement value.
 _Avoid_: raw scan line
 
+**Result View**:
+The GUI view that shows the original image with final Measurement Lines and values.
+_Avoid_: overlay
+
+**Result Image**:
+The exported report image that shows the original image with final Measurement Lines and values.
+_Avoid_: annotated image
+
+**Debug View**:
+The GUI view used to inspect segmentation, boundaries, grouping, and rejected candidates.
+_Avoid_: result view
+
+**Debug Image**:
+The exported diagnostic image used to inspect algorithm behavior.
+_Avoid_: result image
+
+**Trace Sheet**:
+The Excel sheet that stores secondary data needed to trace a measurement back to pixels, scale, ROI, and failure reason.
+_Avoid_: details sheet
+
 **Group**:
 A user-assigned category used to compare distributions across images.
 _Avoid_: tag, class, folder
@@ -66,6 +86,9 @@ _Avoid_: tag, class, folder
 - Adjacent **Metal Islands** in the same row can produce **Horizontal Space**.
 - Adjacent **Metal Islands** in the same column can produce **Vertical Space**.
 - A **Measurement Line** represents one final TCD, BCD, Height, Horizontal Space, or Vertical Space value.
+- A **Result View** and **Result Image** show official measurements without ROI or debug internals.
+- A **Debug View** and **Debug Image** show algorithm internals and may show ROI.
+- A **Trace Sheet** stores secondary measurement context that does not belong in the main Measurements sheet.
 - A **Group** contains one or more images, and each image belongs to exactly one **Group**.
 
 ## Example dialogue
@@ -81,3 +104,4 @@ _Avoid_: tag, class, folder
 - "Space" can mean either **Horizontal Space** or **Vertical Space**. Resolved: use the explicit terms when discussing measurement logic, because they intentionally use different rules.
 - "Height" must not mean bounding-box y-extent. Resolved: **Height** is the maximum vertical chord length inside the Refined Boundary.
 - "ROI result" is misleading. Resolved: **ROI** only limits the **Analysis Region**; output is organized by image and Group.
+- "Overlay", "Annotated Image", and "Details" were ambiguous UI/export names. Resolved: use **Result View**, **Result Image**, and **Trace Sheet**.
