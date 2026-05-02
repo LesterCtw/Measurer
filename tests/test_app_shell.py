@@ -138,6 +138,45 @@ def test_app_measure_current_updates_only_selected_image_and_shows_result_view(
     assert "Height 60.0 px" in window.result_values_label.text()
 
 
+def test_app_result_view_shows_multiple_metal_islands_and_space_measurements(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "multi_island.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=60,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    right_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=150,
+            top_y=24,
+            height=60,
+            tcd=30,
+            bcd=42,
+        )
+    )
+    image[right_image == 220] = 220
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+
+    assert window.file_table.item(0, 4).text() == "Measured"
+    assert "M001 TCD 32.0 px" in window.result_values_label.text()
+    assert "M002 BCD 42.0 px" in window.result_values_label.text()
+    assert "M001-M002 Horizontal Space 44.0 px" in window.result_values_label.text()
+
+
 def test_app_failed_measure_current_stays_on_original_view_with_reason(
     qapp, tmp_path
 ):

@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、clean single Metal Island 的第一條 Measure Current tracer bullet、Metal Island candidate filtering / minimal Debug View diagnostics，以及 Rough Boundary Fallback / trace-ready refinement diagnostics。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics，以及多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -26,14 +26,20 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - Clear ROI 會回到 Full image。
 - ROI geometry 會 clamp 在 image bounds 內。
 - ROI 改變或 Clear ROI 會刪除 stale measurement results，Measure 回到 `Pending`，Export 回到 `Not exported`。
-- Measure Current 支援 clean synthetic STEM ZC Image 中一個 bright Metal Island on dark LK 的 tracer bullet。
+- Measure Current 支援 clean synthetic STEM ZC Image 中多個 bright Metal Islands on dark LK 的 tracer bullet。
 - Measure Current 只量測目前選取圖片，不自動切下一張，也不直接寫 output files。
 - 沒有 ROI 時，Measure Current 使用 full image 作為 Analysis Region；有 Custom ROI 時，只分析 ROI 內像素。
 - Measure Current 會在 Analysis Region 內用 Otsu rough mask 做 connected component detection。
 - candidate filtering 已支援 `HARD_MIN_COMPONENT_AREA_PX = 100`、median-area relative threshold default `MIN_AREA_RATIO_TO_MEDIAN = 0.03`，以及 bbox 距離 Analysis Region boundary <= 1 px 的 boundary-touch exclusion。
 - `MIN_AREA_RATIO_TO_MEDIAN` 可透過 measurement config 覆寫；GUI 調整欄位尚未實作。
 - 如果 filtering 後沒有 Metal Island candidate，Measure 變成 `Failed`，workspace 停在 Original View，status card 顯示 `No metal candidates`。
-- clean single Metal Island 量測會產生 ordered closed Refined Boundary，並計算 TCD、BCD、Height。
+- 每顆通過 filtering 的 Metal Island 會產生 ordered closed Refined Boundary，並計算 TCD、BCD、Height。
+- 多顆 Metal Islands 會依 top-to-bottom、row 內 left-to-right 指派 `M001`、`M002`、`M003` 這類 stable Metal ID。
+- Row / column grouping 使用 refined bbox center 與 median-size tolerance。
+- 同 row adjacent pair 通過 y-overlap criteria 時，會用 refined bbox horizontal gap 產生 Horizontal Space。
+- 同 column adjacent pair 通過 x-overlap criteria 時，會用 shared x-range 上的 minimum vertical boundary-to-boundary gap 產生 Vertical Space。
+- missing pair candidates 或 invalid overlap pairs 不會產生 missing Space rows，也不會讓 image 變成 `Failed`。
+- valid pair 通過 overlap criteria 但 pair calculation 失敗時，會保留 failed final measurement 與 reason；Result View 不顯示 failed measurement line。
 - Refined Boundary 會對 rough boundary point 取 normal-direction brightness profile，可靠的 local half maximum crossing 標記為 `refined`。
 - 如果 profile sample 不足、找不到 crossing、contrast 不足、或 bright/dark direction 不合理，該 boundary point 會使用 `fallback_rough`，不讓 Metal Island measurement 失敗。
 - 即使 fallback ratio 很高，只要 TCD / BCD / Height 可產生 reportable value，Measure status 仍為 `Measured` / measurement result status 仍為 `success`。
@@ -42,15 +48,15 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - BCD 使用 bottom 10% height region 內的最大 horizontal width。
 - Height 使用 Refined Boundary 內的最大 vertical chord length。
 - 成功 Measure Current 後，該圖 Measure 變成 `Measured`，Export 維持 `Not exported`，workspace 切到 Result View。
-- Result View 會顯示原圖加上 TCD / BCD / Height Measurement Lines 與一位小數值，不顯示 ROI 或 debug internals。
-- Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、refined points、fallback points、fallback ratio。
+- Result View 會顯示原圖加上成功的 TCD / BCD / Height / Horizontal Space / Vertical Space Measurement Lines 與一位小數值，不顯示 ROI 或 debug internals。
+- Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、rejected Space pair count、refined points、fallback points、fallback ratio。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
   - Measure = `Pending`
   - Export = `Not exported`
 
-目前尚未實作多 Metal Islands、Horizontal Space、Vertical Space、Box Plot、完整 Debug Image / export-grade diagnostics、Export、`.dm3` input、metadata scale parser，以及真實 STEM ZC 樣本 validation。
+目前尚未實作 Box Plot、完整 Debug Image / export-grade diagnostics、Export、`.dm3` input、metadata scale parser，以及真實 STEM ZC 樣本 validation。
 
 ## 開發指令
 

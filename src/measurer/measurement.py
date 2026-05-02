@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import ceil
 
 import numpy as np
@@ -46,6 +46,8 @@ class Measurement:
     name: str
     value_px: float
     line: MeasurementLine
+    status: str = "success"
+    failure_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,20 @@ class DetectionDiagnostics:
 
 
 @dataclass(frozen=True)
+class MetalIsland:
+    id: str
+    refined_boundary: RefinedBoundary
+    measurements: dict[str, Measurement]
+
+
+@dataclass(frozen=True)
+class SpacePairDiagnostic:
+    pair_name: str
+    measurement_type: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class MeasurementResult:
     status: str
     analysis_region: RectRoi
@@ -96,6 +112,8 @@ class MeasurementResult:
     measurements: dict[str, Measurement]
     failure_reason: str = ""
     detection: DetectionDiagnostics | None = None
+    metal_islands: list[MetalIsland] = field(default_factory=list)
+    rejected_space_pairs: list[SpacePairDiagnostic] = field(default_factory=list)
 
 
 def measure_image(
@@ -111,8 +129,8 @@ def measure_image(
     ]
     threshold = _otsu_threshold(region)
     mask = region > threshold
-    detection, candidate_mask = _detect_metal_candidates(mask, config)
-    if candidate_mask is None:
+    detection, candidates = _detect_metal_candidates(mask, config)
+    if not candidates:
         return MeasurementResult(
             status="failed",
             analysis_region=analysis_region,
@@ -122,18 +140,27 @@ def measure_image(
             detection=detection,
         )
 
-    ys, xs = np.nonzero(candidate_mask)
-    global_ys = ys + analysis_region.y
-    global_xs = xs + analysis_region.x
-    spans = _row_spans(global_xs, global_ys)
-    boundary = _refined_boundary_from_spans(image, spans, analysis_region, config)
-    measurements = _measure_single_metal_island(spans, candidate_mask, analysis_region)
+    metal_islands = _measure_metal_islands(
+        image=image,
+        candidates=candidates,
+        analysis_region=analysis_region,
+        config=config,
+    )
+    measurements = _flatten_metal_measurements(metal_islands)
+    horizontal_measurements, horizontal_rejected = _measure_horizontal_spaces(
+        metal_islands
+    )
+    vertical_measurements, vertical_rejected = _measure_vertical_spaces(metal_islands)
+    measurements.update(horizontal_measurements)
+    measurements.update(vertical_measurements)
     return MeasurementResult(
         status="success",
         analysis_region=analysis_region,
-        refined_boundary=boundary,
+        refined_boundary=metal_islands[0].refined_boundary,
         measurements=measurements,
         detection=detection,
+        metal_islands=metal_islands,
+        rejected_space_pairs=horizontal_rejected + vertical_rejected,
     )
 
 
@@ -183,7 +210,7 @@ def _row_spans(xs: np.ndarray, ys: np.ndarray) -> dict[int, tuple[int, int]]:
 
 def _detect_metal_candidates(
     mask: np.ndarray, config: MeasurementConfig
-) -> tuple[DetectionDiagnostics, np.ndarray | None]:
+) -> tuple[DetectionDiagnostics, list[_Component]]:
     components = _connected_components(mask)
     hard_kept: list[_Component] = []
     excluded_small: list[_Component] = []
@@ -225,12 +252,9 @@ def _detect_metal_candidates(
     )
 
     if not kept_candidates:
-        return diagnostics, None
+        return diagnostics, []
 
-    main_candidate = max(kept_candidates, key=lambda component: component.area_px)
-    candidate_mask = np.zeros(mask.shape, dtype=bool)
-    candidate_mask[main_candidate.local_ys, main_candidate.local_xs] = True
-    return diagnostics, candidate_mask
+    return diagnostics, kept_candidates
 
 
 @dataclass(frozen=True)
@@ -309,6 +333,348 @@ def _touches_analysis_boundary(
 
 def _component_diagnostic(component: _Component) -> ComponentDiagnostic:
     return ComponentDiagnostic(area_px=component.area_px, bbox=component.bbox)
+
+
+def _measure_metal_islands(
+    image: np.ndarray,
+    candidates: list[_Component],
+    analysis_region: RectRoi,
+    config: MeasurementConfig,
+) -> list[MetalIsland]:
+    measured: list[tuple[_Component, RefinedBoundary, dict[str, Measurement]]] = []
+    for candidate in candidates:
+        candidate_mask = np.zeros(
+            (
+                analysis_region.height,
+                analysis_region.width,
+            ),
+            dtype=bool,
+        )
+        candidate_mask[candidate.local_ys, candidate.local_xs] = True
+        global_ys = candidate.local_ys + analysis_region.y
+        global_xs = candidate.local_xs + analysis_region.x
+        spans = _row_spans(global_xs, global_ys)
+        boundary = _refined_boundary_from_spans(image, spans, analysis_region, config)
+        measurements = _measure_single_metal_island(
+            spans, candidate_mask, analysis_region
+        )
+        measured.append((candidate, boundary, measurements))
+
+    ordered_candidates = _assign_metal_ids([candidate for candidate, _, _ in measured])
+    metal_ids = {
+        id(candidate): f"M{index:03d}"
+        for index, candidate in enumerate(ordered_candidates, start=1)
+    }
+    metal_islands = [
+        MetalIsland(
+            id=metal_ids[id(candidate)],
+            refined_boundary=boundary,
+            measurements=measurements,
+        )
+        for candidate, boundary, measurements in measured
+    ]
+    return sorted(metal_islands, key=lambda metal: metal.id)
+
+
+def _assign_metal_ids(candidates: list[_Component]) -> list[_Component]:
+    heights = [
+        candidate.bbox[3] - candidate.bbox[1] + 1
+        for candidate in candidates
+    ]
+    row_tolerance = max(1.0, float(np.median(heights)))
+    rows: list[list[_Component]] = []
+
+    for candidate in sorted(candidates, key=lambda item: _component_center(item)[1]):
+        center_y = _component_center(candidate)[1]
+        for row in rows:
+            row_center_y = float(
+                np.median([_component_center(item)[1] for item in row])
+            )
+            if abs(center_y - row_center_y) <= row_tolerance:
+                row.append(candidate)
+                break
+        else:
+            rows.append([candidate])
+
+    ordered_candidates: list[_Component] = []
+    for row in sorted(
+        rows,
+        key=lambda items: float(
+            np.median([_component_center(item)[1] for item in items])
+        ),
+    ):
+        ordered_candidates.extend(
+            sorted(row, key=lambda item: _component_center(item)[0])
+        )
+
+    return ordered_candidates
+
+
+def _component_center(component: _Component) -> tuple[float, float]:
+    min_x, min_y, max_x, max_y = component.bbox
+    return ((min_x + max_x) / 2, (min_y + max_y) / 2)
+
+
+def _flatten_metal_measurements(
+    metal_islands: list[MetalIsland],
+) -> dict[str, Measurement]:
+    if len(metal_islands) == 1:
+        return metal_islands[0].measurements
+
+    flattened: dict[str, Measurement] = {}
+    for metal in metal_islands:
+        for measurement_name, measurement in metal.measurements.items():
+            key = f"{metal.id} {measurement_name}"
+            flattened[key] = replace(measurement, name=key)
+    return flattened
+
+
+def _measure_horizontal_spaces(
+    metal_islands: list[MetalIsland],
+) -> tuple[dict[str, Measurement], list[SpacePairDiagnostic]]:
+    measurements: dict[str, Measurement] = {}
+    rejected_pairs: list[SpacePairDiagnostic] = []
+    for row in _group_metal_rows(metal_islands):
+        ordered_row = sorted(
+            row, key=lambda metal: _boundary_center(metal.refined_boundary)[0]
+        )
+        for left, right in zip(ordered_row, ordered_row[1:], strict=False):
+            left_bbox = _boundary_bbox(left.refined_boundary)
+            right_bbox = _boundary_bbox(right.refined_boundary)
+            name = f"{left.id}-{right.id} Horizontal Space"
+            if not _has_required_overlap(
+                left_bbox[1],
+                left_bbox[3],
+                right_bbox[1],
+                right_bbox[3],
+            ):
+                rejected_pairs.append(
+                    SpacePairDiagnostic(
+                        pair_name=f"{left.id}-{right.id}",
+                        measurement_type="Horizontal Space",
+                        reason="Insufficient y-overlap.",
+                    )
+                )
+                continue
+
+            y = round(
+                (
+                    _boundary_center(left.refined_boundary)[1]
+                    + _boundary_center(right.refined_boundary)[1]
+                )
+                / 2
+            )
+            measurements[name] = Measurement(
+                name=name,
+                value_px=float(right_bbox[0] - left_bbox[2]),
+                line=MeasurementLine(
+                    start=Point(x=left_bbox[2], y=y),
+                    end=Point(x=right_bbox[0], y=y),
+                ),
+            )
+    return measurements, rejected_pairs
+
+
+def _measure_vertical_spaces(
+    metal_islands: list[MetalIsland],
+) -> tuple[dict[str, Measurement], list[SpacePairDiagnostic]]:
+    measurements: dict[str, Measurement] = {}
+    rejected_pairs: list[SpacePairDiagnostic] = []
+    for column in _group_metal_columns(metal_islands):
+        ordered_column = sorted(
+            column, key=lambda metal: _boundary_center(metal.refined_boundary)[1]
+        )
+        for upper, lower in zip(ordered_column, ordered_column[1:], strict=False):
+            upper_bbox = _boundary_bbox(upper.refined_boundary)
+            lower_bbox = _boundary_bbox(lower.refined_boundary)
+            name = f"{upper.id}-{lower.id} Vertical Space"
+            if not _has_required_overlap(
+                upper_bbox[0],
+                upper_bbox[2],
+                lower_bbox[0],
+                lower_bbox[2],
+            ):
+                rejected_pairs.append(
+                    SpacePairDiagnostic(
+                        pair_name=f"{upper.id}-{lower.id}",
+                        measurement_type="Vertical Space",
+                        reason="Insufficient x-overlap.",
+                    )
+                )
+                continue
+
+            gap = _minimum_vertical_boundary_gap(
+                upper.refined_boundary, lower.refined_boundary
+            )
+            if gap is None:
+                measurements[name] = Measurement(
+                    name=name,
+                    value_px=float("nan"),
+                    line=_fallback_vertical_space_line(upper_bbox, lower_bbox),
+                    status="failed",
+                    failure_reason=(
+                        "Could not calculate vertical boundary intersections."
+                    ),
+                )
+                continue
+
+            x = round(
+                (
+                    max(upper_bbox[0], lower_bbox[0])
+                    + min(upper_bbox[2], lower_bbox[2])
+                )
+                / 2
+            )
+            upper_bottom_y = max(
+                _vertical_boundary_intersections(upper.refined_boundary, x)
+            )
+            lower_top_y = min(
+                _vertical_boundary_intersections(lower.refined_boundary, x)
+            )
+            measurements[name] = Measurement(
+                name=name,
+                value_px=float(gap),
+                line=MeasurementLine(
+                    start=Point(x=x, y=round(upper_bottom_y)),
+                    end=Point(x=x, y=round(lower_top_y)),
+                ),
+            )
+    return measurements, rejected_pairs
+
+
+def _fallback_vertical_space_line(
+    upper_bbox: tuple[int, int, int, int],
+    lower_bbox: tuple[int, int, int, int],
+) -> MeasurementLine:
+    x = round(
+        (max(upper_bbox[0], lower_bbox[0]) + min(upper_bbox[2], lower_bbox[2]))
+        / 2
+    )
+    return MeasurementLine(
+        start=Point(x=x, y=upper_bbox[3]),
+        end=Point(x=x, y=lower_bbox[1]),
+    )
+
+
+def _minimum_vertical_boundary_gap(
+    upper_boundary: RefinedBoundary, lower_boundary: RefinedBoundary
+) -> float | None:
+    upper_bbox = _boundary_bbox(upper_boundary)
+    lower_bbox = _boundary_bbox(lower_boundary)
+    overlap_min_x = max(upper_bbox[0], lower_bbox[0])
+    overlap_max_x = min(upper_bbox[2], lower_bbox[2])
+    gaps: list[float] = []
+    for x in range(overlap_min_x, overlap_max_x + 1):
+        upper_intersections = _vertical_boundary_intersections(upper_boundary, x)
+        lower_intersections = _vertical_boundary_intersections(lower_boundary, x)
+        if not upper_intersections or not lower_intersections:
+            continue
+
+        gaps.append(min(lower_intersections) - max(upper_intersections))
+
+    if not gaps:
+        return None
+    return min(gaps)
+
+
+def _vertical_boundary_intersections(
+    boundary: RefinedBoundary, x: int
+) -> list[float]:
+    intersections: list[float] = []
+    for start, end in zip(boundary.points, boundary.points[1:], strict=False):
+        min_x = min(start.x, end.x)
+        max_x = max(start.x, end.x)
+        if not (min_x <= x <= max_x):
+            continue
+
+        if start.x == end.x:
+            if x == start.x:
+                intersections.extend([float(start.y), float(end.y)])
+            continue
+
+        fraction = (x - start.x) / (end.x - start.x)
+        intersections.append(start.y + fraction * (end.y - start.y))
+    return intersections
+
+
+def _group_metal_rows(metal_islands: list[MetalIsland]) -> list[list[MetalIsland]]:
+    if not metal_islands:
+        return []
+
+    heights = [
+        _boundary_bbox(metal.refined_boundary)[3]
+        - _boundary_bbox(metal.refined_boundary)[1]
+        + 1
+        for metal in metal_islands
+    ]
+    tolerance = max(1.0, float(np.median(heights)))
+    rows: list[list[MetalIsland]] = []
+    for metal in sorted(
+        metal_islands, key=lambda item: _boundary_center(item.refined_boundary)[1]
+    ):
+        center_y = _boundary_center(metal.refined_boundary)[1]
+        for row in rows:
+            row_center_y = float(
+                np.median(
+                    [_boundary_center(item.refined_boundary)[1] for item in row]
+                )
+            )
+            if abs(center_y - row_center_y) <= tolerance:
+                row.append(metal)
+                break
+        else:
+            rows.append([metal])
+    return rows
+
+
+def _group_metal_columns(metal_islands: list[MetalIsland]) -> list[list[MetalIsland]]:
+    if not metal_islands:
+        return []
+
+    widths = [
+        _boundary_bbox(metal.refined_boundary)[2]
+        - _boundary_bbox(metal.refined_boundary)[0]
+        + 1
+        for metal in metal_islands
+    ]
+    tolerance = max(1.0, float(np.median(widths)))
+    columns: list[list[MetalIsland]] = []
+    for metal in sorted(
+        metal_islands, key=lambda item: _boundary_center(item.refined_boundary)[0]
+    ):
+        center_x = _boundary_center(metal.refined_boundary)[0]
+        for column in columns:
+            column_center_x = float(
+                np.median(
+                    [_boundary_center(item.refined_boundary)[0] for item in column]
+                )
+            )
+            if abs(center_x - column_center_x) <= tolerance:
+                column.append(metal)
+                break
+        else:
+            columns.append([metal])
+    return columns
+
+
+def _has_required_overlap(
+    first_min: int, first_max: int, second_min: int, second_max: int
+) -> bool:
+    overlap = min(first_max, second_max) - max(first_min, second_min) + 1
+    first_size = first_max - first_min + 1
+    second_size = second_max - second_min + 1
+    return overlap > min(first_size, second_size) * 0.3
+
+
+def _boundary_bbox(boundary: RefinedBoundary) -> tuple[int, int, int, int]:
+    xs = [point.x for point in boundary.points]
+    ys = [point.y for point in boundary.points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _boundary_center(boundary: RefinedBoundary) -> tuple[float, float]:
+    min_x, min_y, max_x, max_y = _boundary_bbox(boundary)
+    return (min_x + max_x) / 2, (min_y + max_y) / 2
 
 
 def _refined_boundary_from_spans(

@@ -266,3 +266,183 @@ def test_min_area_ratio_to_median_can_be_configured():
         for component in result.detection.excluded_small_components
     ]
     assert 500 in excluded_areas
+
+
+def test_measure_multiple_metal_islands_in_one_row_with_stable_ids():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=60,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    right_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=150,
+            top_y=24,
+            height=60,
+            tcd=30,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[right_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    assert result.status == "success"
+    assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
+    assert result.metal_islands[0].measurements["TCD"].value_px == pytest.approx(32)
+    assert result.metal_islands[0].measurements["BCD"].value_px == pytest.approx(48)
+    assert result.metal_islands[0].measurements["Height"].value_px == pytest.approx(60)
+    assert result.metal_islands[1].measurements["TCD"].value_px == pytest.approx(30)
+    assert result.metal_islands[1].measurements["BCD"].value_px == pytest.approx(42)
+    assert result.metal_islands[1].measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_measure_horizontal_space_between_same_row_adjacent_metal_islands():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=60,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    right_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=150,
+            top_y=24,
+            height=60,
+            tcd=30,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[right_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(44)
+
+
+def test_measure_vertical_space_between_same_column_adjacent_metal_islands():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=180,
+            center_x=90,
+            top_y=20,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    lower_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=180,
+            center_x=90,
+            top_y=100,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[lower_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
+    assert result.measurements["M001-M002 Vertical Space"].value_px == pytest.approx(31)
+
+
+def test_invalid_overlap_pair_is_omitted_without_failing_image():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=160,
+            center_x=60,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    offset_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=160,
+            center_x=150,
+            top_y=69,
+            height=60,
+            tcd=30,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[offset_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    assert result.status == "success"
+    assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
+    assert "M001-M002 Horizontal Space" not in result.measurements
+    assert result.rejected_space_pairs[0].pair_name == "M001-M002"
+    assert result.rejected_space_pairs[0].measurement_type == "Horizontal Space"
+    assert result.rejected_space_pairs[0].reason == "Insufficient y-overlap."
+    assert result.metal_islands[0].measurements["Height"].value_px == pytest.approx(60)
+    assert result.metal_islands[1].measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_metal_island_ids_are_top_to_bottom_then_left_to_right_within_rows():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=240,
+            image_height=220,
+            center_x=60,
+            top_y=24,
+            height=50,
+            tcd=30,
+            bcd=40,
+        )
+    )
+    for center_x, top_y in [(150, 28), (55, 126), (148, 122)]:
+        island_image = create_single_metal_island_image(
+            SingleMetalIslandSpec(
+                image_width=240,
+                image_height=220,
+                center_x=center_x,
+                top_y=top_y,
+                height=50,
+                tcd=30,
+                bcd=40,
+            )
+        )
+        image[island_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    assert [metal.id for metal in result.metal_islands] == [
+        "M001",
+        "M002",
+        "M003",
+        "M004",
+    ]
+    assert [
+        measurement.value_px
+        for measurement in result.measurements.values()
+        if measurement.name.endswith("TCD")
+    ] == pytest.approx([30, 30, 30, 30])
