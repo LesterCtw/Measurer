@@ -3,6 +3,7 @@ import tifffile
 from PySide6.QtCore import QItemSelectionModel
 
 from measurer.app import create_window
+from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
 
 def test_app_window_opens_with_empty_queue(qapp):
@@ -102,3 +103,36 @@ def test_app_sets_and_clears_roi_for_selected_image(qapp, tmp_path):
 
     assert window.file_table.item(0, 3).text() == "Full image"
     assert window.queue.rows[0].roi is None
+
+
+def test_app_measure_current_updates_only_selected_image_and_shows_result_view(
+    qapp, tmp_path
+):
+    first_path = tmp_path / "first.tif"
+    second_path = tmp_path / "second.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(first_path, np.ones((128, 128), dtype=np.uint8) * 20)
+    tifffile.imwrite(second_path, image)
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.file_table.setCurrentCell(1, 1)
+    window.measure_current_button.click()
+
+    assert window.file_table.item(0, 4).text() == "Pending"
+    assert window.file_table.item(1, 4).text() == "Measured"
+    assert window.file_table.item(1, 5).text() == "Not exported"
+    assert window.current_view_mode == "Result View"
+    assert "TCD 32.0 px" in window.result_values_label.text()
+    assert "BCD 48.0 px" in window.result_values_label.text()
+    assert "Height 60.0 px" in window.result_values_label.text()

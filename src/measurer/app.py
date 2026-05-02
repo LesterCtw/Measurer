@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QPoint, Qt, QSignalBlocker
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi
+from measurer.measurement import MeasurementResult, measure_image
 
 
 class ImageCanvas(QLabel):
@@ -67,6 +68,8 @@ class MeasurerWindow(QMainWindow):
         self.scale_error_label = QLabel("")
         self.clear_roi_button = QPushButton("Clear ROI")
         self.clear_roi_button.clicked.connect(self._clear_selected_roi)
+        self.measure_current_button = QPushButton("Measure Current")
+        self.measure_current_button.clicked.connect(self._measure_selected_image)
         self.file_table = QTableWidget(0, 6)
         self.file_table.setHorizontalHeaderLabels(
             ["Select", "File", "Group", "ROI", "Measure", "Export"]
@@ -79,7 +82,9 @@ class MeasurerWindow(QMainWindow):
         )
         self.file_table.currentCellChanged.connect(self._select_image)
         self.status_label = QLabel("No images added.")
+        self.result_values_label = QLabel("")
         self.image_label = ImageCanvas(self.set_selected_roi)
+        self.current_view_mode = "Original View"
 
         controls = QVBoxLayout()
         controls.addWidget(self.add_images_button)
@@ -88,11 +93,13 @@ class MeasurerWindow(QMainWindow):
         controls.addWidget(self.scale_input)
         controls.addWidget(self.scale_error_label)
         controls.addWidget(self.clear_roi_button)
+        controls.addWidget(self.measure_current_button)
         controls.addWidget(self.file_table)
         controls.addWidget(self.status_label)
 
         workspace = QVBoxLayout()
         workspace.addWidget(self.image_label)
+        workspace.addWidget(self.result_values_label)
 
         root_layout = QHBoxLayout()
         root_layout.addLayout(controls, 1)
@@ -122,6 +129,8 @@ class MeasurerWindow(QMainWindow):
         if current_row < 0 or current_row >= len(self.queue.rows):
             return
         self.image_label.setPixmap(_array_to_pixmap(self.queue.rows[current_row].image))
+        self.current_view_mode = "Original View"
+        self.result_values_label.setText("")
         self._sync_scale_input(current_row)
 
     def set_selected_roi(self, x: int, y: int, width: int, height: int) -> bool:
@@ -183,6 +192,29 @@ class MeasurerWindow(QMainWindow):
             self.file_table.setCurrentCell(row_index, 1)
             self._select_image(row_index)
 
+    def _measure_selected_image(self) -> None:
+        row_index = self.file_table.currentRow()
+        if row_index < 0 or row_index >= len(self.queue.rows):
+            return
+
+        row = self.queue.rows[row_index]
+        result = measure_image(row.image, row.roi)
+        if result.status != "success":
+            self.queue.record_measurement_failure(row_index)
+            self._refresh_file_table()
+            self.file_table.setCurrentCell(row_index, 1)
+            self.status_label.setText("Measurement failed.")
+            return
+
+        self.queue.record_measurement_result(row_index, result)
+        self._refresh_file_table()
+        self.file_table.setCurrentCell(row_index, 1)
+        scale = self.queue.resolve_scale(row_index)
+        self.image_label.setPixmap(_result_to_pixmap(row.image, result))
+        self.result_values_label.setText(_format_result_values(result, scale.nm_per_px))
+        self.current_view_mode = "Result View"
+        self.status_label.setText("Measurement completed.")
+
     def _refresh_file_table(self) -> None:
         self.file_table.setRowCount(len(self.queue.rows))
         for row_index, row in enumerate(self.queue.rows):
@@ -229,6 +261,46 @@ def _array_to_pixmap(image: np.ndarray) -> QPixmap:
         display.data, width, height, bytes_per_line, QImage.Format.Format_Grayscale8
     ).copy()
     return QPixmap.fromImage(qimage)
+
+
+def _result_to_pixmap(image: np.ndarray, result: MeasurementResult) -> QPixmap:
+    display = _normalize_to_uint8(image)
+    height, width = display.shape
+    rgb = np.ascontiguousarray(np.dstack([display, display, display]))
+    qimage = QImage(
+        rgb.data,
+        width,
+        height,
+        width * 3,
+        QImage.Format.Format_RGB888,
+    ).copy()
+    painter = QPainter(qimage)
+    painter.setPen(QPen(QColor(255, 210, 64), 2))
+    for measurement in result.measurements.values():
+        painter.drawLine(
+            measurement.line.start.x,
+            measurement.line.start.y,
+            measurement.line.end.x,
+            measurement.line.end.y,
+        )
+        painter.drawText(
+            measurement.line.end.x + 4,
+            measurement.line.end.y,
+            f"{measurement.name} {measurement.value_px:.1f}",
+        )
+    painter.end()
+    return QPixmap.fromImage(qimage)
+
+
+def _format_result_values(
+    result: MeasurementResult, nm_per_px: float | None
+) -> str:
+    unit = "px" if nm_per_px is None else "nm"
+    scale = 1.0 if nm_per_px is None else nm_per_px
+    return " | ".join(
+        f"{name} {measurement.value_px * scale:.1f} {unit}"
+        for name, measurement in result.measurements.items()
+    )
 
 
 def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:

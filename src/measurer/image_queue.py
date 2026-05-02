@@ -169,8 +169,19 @@ class ImageQueue:
         self.rows[row_index] = replace(
             self.rows[row_index],
             measure_status="Measured",
-            export_status="Exported",
+            export_status="Not exported",
             measurement_results=result,
+        )
+
+    def record_measurement_failure(self, row_index: int) -> None:
+        if row_index < 0 or row_index >= len(self.rows):
+            return
+
+        self.rows[row_index] = replace(
+            self.rows[row_index],
+            measure_status="Failed",
+            export_status="Not exported",
+            measurement_results=None,
         )
 
     def set_roi(self, row_index: int, roi: RectRoi) -> bool:
