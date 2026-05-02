@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，第一個 implementation slice（PySide6 app shell + TIFF Add Images / Original preview）已開始實作。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview，以及 guided queue 的 Group、per-image scale、rectangle ROI state slice。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -18,13 +18,21 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - multi-page TIFF / 3D stack / unreadable TIFF 在 Add Images 時 skip，不加入 queue。
 - Add Images batch summary 顯示 added / skipped 與原因數量。
 - duplicate absolute file path 直接忽略，不重設既有 row。
+- file queue 支援選取一列或多列後用 Set Group 套用 group name。
+- Group name 會 trim 前後空白，trim 後空字串會被拒絕；中間空白與大小寫差異會保留。
+- `nm / pixel` 是每張圖片各自的 scale state；metadata scale 優先且不可手動覆寫，沒有 metadata 時可輸入 manual scale，空白時使用 px。
+- manual `nm / pixel` 只接受正數與小數；`0`、負數、非數字會顯示 inline error 並保留上一個 valid scale state。
+- selected image 支援一個 rectangle ROI，拖拉新 ROI 會取代舊 ROI。
+- Clear ROI 會回到 Full image。
+- ROI geometry 會 clamp 在 image bounds 內。
+- ROI 改變或 Clear ROI 會刪除 stale measurement results，Measure 回到 `Pending`，Export 回到 `Not exported`。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
   - Measure = `Pending`
   - Export = `Not exported`
 
-目前尚未實作 measurement、ROI editing、Group editing、scale input、Box Plot、Debug View、Export、`.dm3` input。
+目前尚未實作 measurement、Box Plot、Debug View、Export、`.dm3` input、metadata scale parser。
 
 ## 開發指令
 
@@ -125,7 +133,7 @@ Synthetic image generator 需要產生：
 - `.dm3` 讀得到 image data 但讀不到 metadata scale 時，不跳 warning，不阻止 Measure / Export；Result View / Excel 顯示單位 `px`，Trace Sheet 記錄 `scale_source = px`。
 - GUI Box Plot 不允許混合 nm 與 px。
 - Excel Summary 不混合 nm 與 px；若同一次 Export 同時有 nm 與 px，依 `unit` 分開統計。
-- 使用者手動輸入 nm/pixel 時，會套用到所有圖片。
+- Scale 以每張圖片各自判斷：metadata scale 優先且不可手動覆寫；沒有 metadata scale 時才允許使用者輸入 manual nm/pixel；沒有 metadata scale 且使用者未輸入時，該圖使用 px。
 
 ## GUI 風格與佈局
 
@@ -276,32 +284,35 @@ GUI 左側提供一個欄位：
 nm / pixel: [        ]
 ```
 
+Scale 每張圖片各自判斷。GUI 左側的 `nm / pixel` 欄位顯示目前選取圖片的 scale 狀態；切換圖片時，欄位跟著目前選取圖片更新。
+
 Scale 優先順序：
 
 ```text
-1. manual nm/pixel
-2. metadata nm/pixel per image
+1. metadata nm/pixel per image
+2. manual nm/pixel for this image
 3. px
 ```
 
 規則：
 
-- 手動 nm/pixel 有填：所有圖片使用手動 scale，輸出 nm。
-- 手動 nm/pixel 沒填：嘗試使用每張圖片 metadata scale。
-- metadata scale 讀不到：該圖仍可量測，輸出 px。
-- 手動 nm/pixel 清空後，已量測結果不丟失，顯示值回到 metadata scale 或 px。
+- 圖片有 metadata scale 時，直接採用 metadata scale，欄位顯示該值並設為不可編輯。
+- 圖片沒有 metadata scale 時，欄位保持可編輯，讓使用者可自行輸入 manual nm/pixel。
+- 圖片沒有 metadata scale 且使用者未輸入 manual nm/pixel 時，該圖仍可量測，輸出 px。
+- 使用者清空 manual nm/pixel 後，已量測結果不丟失，該圖顯示值回到 px。
 - 量測結果內部永遠保存 value_px 與線段座標 px。
-- 顯示、box plot、Excel export 時再依目前 scale 轉成 nm 或維持 px。
+- 顯示、box plot、Excel export 時再依每張圖片當下 scale 轉成 nm 或維持 px。
 - 改 manual nm/pixel 不改 measurement geometry。
 - 改 manual nm/pixel 不需要重新 Measure，也不把圖片狀態改成 Needs remeasure。
-- Result View 數值、Box Plot、Export 都使用當下最新 scale。
+- Result View 數值、Box Plot、Export 都使用每張圖片當下最新 scale。
 - Trace Sheet 記錄 export 當下使用的 `scale_source` / `scale_nm_per_px`。
 
-GUI 不需要顯示 scale source。Trace Sheet 可以記錄 scale source 方便追查。
+GUI 需要顯示目前選取圖片使用的 scale value 與欄位是否可編輯。Trace Sheet 記錄 scale source 方便追查。
 
 Manual `nm / pixel` 輸入驗證：
 
-- 空白代表不使用 manual scale，改用 metadata scale；metadata 沒有就用 px。
+- 只有圖片沒有 metadata scale 時才允許輸入 manual scale。
+- 空白代表不使用 manual scale，該圖使用 px。
 - 只接受正數。
 - `0`、負數、非數字不允許。
 - 可以輸入小數，例如 `0.25`。
@@ -351,7 +362,7 @@ TODO：
 
 ```text
 讀取影像
-→ 取得 scale：manual / metadata / px
+→ 取得 scale：metadata / manual / px
 → 建立 analysis mask：ROI 或 full image
 → 在 analysis mask 內計算 Otsu threshold
 → Otsu rough metal mask
@@ -1152,7 +1163,7 @@ Debug Image：
 - Refined Boundary 的 MVS shape 是 ordered closed polyline：保留 rough contour 順序，refined / fallback point 接成閉合折線；不做 smoothing、spline fitting、boundary outlier repair。
 - Export overwrite confirmation 只做整批確認：偵測到既有檔案時，顯示 output folder 與將被覆蓋的檔案類型 / 數量，使用者只能 `Cancel` 或 `Overwrite`。
 - Excel Export 遇到 mixed unit 時不失敗；Measurements / Trace 全部輸出，Summary 依 `group + measurement type + unit` 分開統計。
-- 改 manual nm/pixel 不需要重測；Result View、Box Plot、Export 都用當下最新 scale 轉換，Trace Sheet 記錄 export 當下的 scale。
+- 改 manual nm/pixel 不需要重測；Result View、Box Plot、Export 都用該圖片當下最新 scale 轉換，Trace Sheet 記錄 export 當下的 scale。
 - ROI 改變或 Clear ROI 後直接刪除舊 measurement result，Measure 狀態回到 Pending，Export 狀態回到 Not exported。
 - Export 只包含 Measured 圖片；Pending / Failed 圖片不輸出 Result Image、Debug Image，也不寫入 Excel。
 - 沒有任何 Measured 圖片時阻止 Export，顯示 `No measured images to export.`，不建立資料夾或空 Excel。
@@ -1164,7 +1175,7 @@ Debug Image：
 - `.dm3` / TIFF image data 讀取失敗時，在 Add Images 直接拒絕，不加入 file queue；其他合法圖片仍正常加入。
 - Add Images 以 absolute file path 去重；同一路徑重複加入直接忽略，不重設既有 row， 不同資料夾同檔名允許加入。
 - Group name 前後空白自動 trim，trim 後不可為空；中間空白、中文、英文、數字允許，大小寫視為不同 group。
-- Manual `nm / pixel` 空白代表 metadata / px；只接受正數，可輸入小數；`0`、負數、非數字不套用並顯示 inline error。
+- Manual `nm / pixel` 只在圖片沒有 metadata scale 時可編輯；空白代表該圖使用 px；只接受正數，可輸入小數；`0`、負數、非數字不套用並顯示 inline error。
 - ROI rectangle 必須 clamp 在影像範圍內；ROI 太小時 Measure Current 不執行，且不把圖片狀態改成 Failed。
 - Measure Current 若失敗，GUI 停在 Original，不自動切 Debug View；file table 顯示 Failed，左側 status card 顯示 failure reason。
 - Failed 圖片不寫入 Trace Sheet；failure reason 只保留在 GUI status card / Debug View。

@@ -1,10 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 import tifffile
+
+
+@dataclass(frozen=True)
+class ScaleResolution:
+    source: str
+    nm_per_px: float | None
+
+
+@dataclass(frozen=True)
+class RectRoi:
+    x: int
+    y: int
+    width: int
+    height: int
 
 
 @dataclass(frozen=True)
@@ -13,9 +27,14 @@ class QueueRow:
     file_name: str
     image: np.ndarray
     group: str = "Default"
+    metadata_nm_per_px: float | None = None
+    manual_nm_per_px: float | None = None
+    scale_error: str = ""
+    roi: RectRoi | None = None
     roi_status: str = "Full image"
     measure_status: str = "Pending"
     export_status: str = "Not exported"
+    measurement_results: object | None = None
 
 
 @dataclass(frozen=True)
@@ -66,14 +85,126 @@ class ImageQueue:
                 _count_skip(skipped_reasons, "unsupported image shape")
                 continue
 
-            row = QueueRow(path=path, file_name=path.name, image=image)
-            self.rows.append(row)
-            self._paths.add(path)
+            self.add_image_data(path, image)
             added_count += 1
 
         return AddImagesSummary(
             added_count=added_count, skipped_reasons=skipped_reasons
         )
+
+    def add_image_data(
+        self,
+        path: str | Path,
+        image: np.ndarray,
+        metadata_nm_per_px: float | None = None,
+    ) -> None:
+        resolved_path = Path(path).resolve()
+        row = QueueRow(
+            path=resolved_path,
+            file_name=resolved_path.name,
+            image=image,
+            metadata_nm_per_px=metadata_nm_per_px,
+        )
+        self.rows.append(row)
+        self._paths.add(resolved_path)
+
+    def set_group(self, row_indexes: list[int], group_name: str) -> bool:
+        trimmed_name = group_name.strip()
+        if trimmed_name == "":
+            return False
+
+        for row_index in row_indexes:
+            if 0 <= row_index < len(self.rows):
+                self.rows[row_index] = replace(
+                    self.rows[row_index], group=trimmed_name
+                )
+        return True
+
+    def set_manual_scale(self, row_index: int, scale_text: str) -> bool:
+        if row_index < 0 or row_index >= len(self.rows):
+            return False
+
+        row = self.rows[row_index]
+        if row.metadata_nm_per_px is not None:
+            return False
+
+        stripped_text = scale_text.strip()
+        if stripped_text == "":
+            self.rows[row_index] = replace(
+                row, manual_nm_per_px=None, scale_error=""
+            )
+            return True
+
+        try:
+            scale = float(stripped_text)
+        except ValueError:
+            self.rows[row_index] = replace(
+                row, scale_error="Enter a positive nm / pixel value."
+            )
+            return False
+
+        if scale <= 0:
+            self.rows[row_index] = replace(
+                row, scale_error="Enter a positive nm / pixel value."
+            )
+            return False
+
+        self.rows[row_index] = replace(
+            row, manual_nm_per_px=scale, scale_error=""
+        )
+        return True
+
+    def resolve_scale(self, row_index: int) -> ScaleResolution:
+        row = self.rows[row_index]
+        if row.metadata_nm_per_px is not None:
+            return ScaleResolution(source="metadata", nm_per_px=row.metadata_nm_per_px)
+        if row.manual_nm_per_px is not None:
+            return ScaleResolution(source="manual", nm_per_px=row.manual_nm_per_px)
+        return ScaleResolution(source="px", nm_per_px=None)
+
+    def record_measurement_result(self, row_index: int, result: object) -> None:
+        if row_index < 0 or row_index >= len(self.rows):
+            return
+
+        self.rows[row_index] = replace(
+            self.rows[row_index],
+            measure_status="Measured",
+            export_status="Exported",
+            measurement_results=result,
+        )
+
+    def set_roi(self, row_index: int, roi: RectRoi) -> bool:
+        if row_index < 0 or row_index >= len(self.rows):
+            return False
+
+        row = self.rows[row_index]
+        clamped_roi = _clamp_roi_to_image(roi, row.image)
+        if clamped_roi is None:
+            return False
+
+        self.rows[row_index] = replace(
+            row,
+            roi=clamped_roi,
+            roi_status="Custom ROI",
+            measure_status="Pending",
+            export_status="Not exported",
+            measurement_results=None,
+        )
+        return True
+
+    def clear_roi(self, row_index: int) -> bool:
+        if row_index < 0 or row_index >= len(self.rows):
+            return False
+
+        self.rows[row_index] = replace(
+            self.rows[row_index],
+            roi=None,
+            roi_status="Full image",
+            measure_status="Pending",
+            export_status="Not exported",
+            measurement_results=None,
+        )
+        return True
 
 
 def _read_tiff_image(path: Path) -> np.ndarray:
@@ -83,7 +214,11 @@ def _read_tiff_image(path: Path) -> np.ndarray:
         page = tiff.pages[0]
         image = tiff.asarray()
 
-    if image.ndim == 3 and image.shape[-1] in (3, 4) and page.samplesperpixel in (3, 4):
+    if (
+        image.ndim == 3
+        and image.shape[-1] in (3, 4)
+        and page.samplesperpixel in (3, 4)
+    ):
         return _to_grayscale(image)
     return image
 
@@ -104,3 +239,16 @@ def _to_grayscale(image: np.ndarray) -> np.ndarray:
 
 def _count_skip(skipped_reasons: dict[str, int], reason: str) -> None:
     skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+
+
+def _clamp_roi_to_image(roi: RectRoi, image: np.ndarray) -> RectRoi | None:
+    image_height, image_width = image.shape
+    left = max(0, roi.x)
+    top = max(0, roi.y)
+    right = min(image_width, roi.x + roi.width)
+    bottom = min(image_height, roi.y + roi.height)
+    width = right - left
+    height = bottom - top
+    if width <= 0 or height <= 0:
+        return None
+    return RectRoi(x=left, y=top, width=width, height=height)
