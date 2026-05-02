@@ -1,10 +1,50 @@
 # Measurer
 
-專案狀態：MVS 規格整理中。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，第一個 implementation slice（PySide6 app shell + TIFF Add Images / Original preview）已開始實作。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
 Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對 Metal Island、ROI、Refined Boundary、TCD、BCD、Height、Horizontal Space、Vertical Space 等詞彙的定義。
+
+## 目前已實作
+
+- `uv` Python project scaffold。
+- PySide6 desktop app shell。
+- `measurer` command 可啟動 GUI。
+- 左側 File Queue / control panel 與右側 Original preview workspace。
+- Add Images 支援 single 2D TIFF。
+- 8-bit / 16-bit grayscale TIFF 可加入 queue。
+- RGB/RGBA TIFF 直接轉 grayscale，不顯示 warning。
+- multi-page TIFF / 3D stack / unreadable TIFF 在 Add Images 時 skip，不加入 queue。
+- Add Images batch summary 顯示 added / skipped 與原因數量。
+- duplicate absolute file path 直接忽略，不重設既有 row。
+- file queue row 預設顯示：
+  - Group = `Default`
+  - ROI = `Full image`
+  - Measure = `Pending`
+  - Export = `Not exported`
+
+目前尚未實作 measurement、ROI editing、Group editing、scale input、Box Plot、Debug View、Export、`.dm3` input。
+
+## 開發指令
+
+安裝 / 同步環境：
+
+```bash
+uv sync
+```
+
+執行 GUI：
+
+```bash
+uv run measurer
+```
+
+執行測試：
+
+```bash
+uv run pytest
+```
 
 ## 目前 MVS 目標
 
