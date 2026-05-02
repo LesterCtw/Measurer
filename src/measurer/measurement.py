@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import ceil
 
 import numpy as np
@@ -10,6 +10,11 @@ from measurer.image_queue import RectRoi
 HARD_MIN_COMPONENT_AREA_PX = 100
 MIN_AREA_RATIO_TO_MEDIAN = 0.03
 BOUNDARY_TOUCH_MARGIN_PX = 1
+BOUNDARY_PROFILE_HALF_LENGTH_PX = 12
+BOUNDARY_PROFILE_AVERAGING_WIDTH_PX = 5
+REFINEMENT_SAMPLING_STEP_PX = 2
+MIN_REFINEMENT_SIDE_SAMPLES = 4
+MIN_REFINEMENT_CONTRAST = 5.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,11 @@ class MeasurementConfig:
     hard_min_component_area_px: int = HARD_MIN_COMPONENT_AREA_PX
     min_area_ratio_to_median: float = MIN_AREA_RATIO_TO_MEDIAN
     boundary_touch_margin_px: int = BOUNDARY_TOUCH_MARGIN_PX
+    boundary_profile_half_length_px: int = BOUNDARY_PROFILE_HALF_LENGTH_PX
+    boundary_profile_averaging_width_px: int = BOUNDARY_PROFILE_AVERAGING_WIDTH_PX
+    refinement_sampling_step_px: int = REFINEMENT_SAMPLING_STEP_PX
+    min_refinement_side_samples: int = MIN_REFINEMENT_SIDE_SAMPLES
+    min_refinement_contrast: float = MIN_REFINEMENT_CONTRAST
 
 
 @dataclass(frozen=True)
@@ -39,8 +49,29 @@ class Measurement:
 
 
 @dataclass(frozen=True)
+class BoundaryPoint:
+    point: Point
+    status: str
+
+
+@dataclass(frozen=True)
 class RefinedBoundary:
     points: list[Point]
+    point_statuses: list[str] = field(default_factory=list)
+
+    @property
+    def refined_point_count(self) -> int:
+        return self.point_statuses.count("refined")
+
+    @property
+    def fallback_point_count(self) -> int:
+        return self.point_statuses.count("fallback_rough")
+
+    @property
+    def fallback_ratio(self) -> float:
+        if not self.point_statuses:
+            return 0.0
+        return self.fallback_point_count / len(self.point_statuses)
 
 
 @dataclass(frozen=True)
@@ -95,7 +126,7 @@ def measure_image(
     global_ys = ys + analysis_region.y
     global_xs = xs + analysis_region.x
     spans = _row_spans(global_xs, global_ys)
-    boundary = RefinedBoundary(points=_closed_boundary_from_spans(spans))
+    boundary = _refined_boundary_from_spans(image, spans, analysis_region, config)
     measurements = _measure_single_metal_island(spans, candidate_mask, analysis_region)
     return MeasurementResult(
         status="success",
@@ -280,13 +311,180 @@ def _component_diagnostic(component: _Component) -> ComponentDiagnostic:
     return ComponentDiagnostic(area_px=component.area_px, bbox=component.bbox)
 
 
-def _closed_boundary_from_spans(spans: dict[int, tuple[int, int]]) -> list[Point]:
-    left_points = [Point(x=spans[y][0], y=y) for y in sorted(spans)]
-    right_points = [Point(x=spans[y][1], y=y) for y in sorted(spans, reverse=True)]
-    points = left_points + right_points
-    if points:
-        points.append(points[0])
-    return points
+def _refined_boundary_from_spans(
+    image: np.ndarray,
+    spans: dict[int, tuple[int, int]],
+    analysis_region: RectRoi,
+    config: MeasurementConfig,
+) -> RefinedBoundary:
+    boundary_points: list[BoundaryPoint] = []
+    for y in sorted(spans):
+        rough_point = Point(x=spans[y][0], y=y)
+        boundary_points.append(
+            _refine_boundary_point(
+                image=image,
+                rough_point=rough_point,
+                inside_direction=(1, 0),
+                analysis_region=analysis_region,
+                config=config,
+            )
+        )
+
+    for y in sorted(spans, reverse=True):
+        rough_point = Point(x=spans[y][1], y=y)
+        boundary_points.append(
+            _refine_boundary_point(
+                image=image,
+                rough_point=rough_point,
+                inside_direction=(-1, 0),
+                analysis_region=analysis_region,
+                config=config,
+            )
+        )
+
+    if boundary_points:
+        boundary_points.append(boundary_points[0])
+
+    return RefinedBoundary(
+        points=[boundary_point.point for boundary_point in boundary_points],
+        point_statuses=[
+            boundary_point.status for boundary_point in boundary_points
+        ],
+    )
+
+
+def _refine_boundary_point(
+    image: np.ndarray,
+    rough_point: Point,
+    inside_direction: tuple[int, int],
+    analysis_region: RectRoi,
+    config: MeasurementConfig,
+) -> BoundaryPoint:
+    profile = _sample_boundary_profile(
+        image=image,
+        rough_point=rough_point,
+        inside_direction=inside_direction,
+        analysis_region=analysis_region,
+        config=config,
+    )
+    outside_samples = [value for offset, value in profile if offset < 0]
+    inside_samples = [value for offset, value in profile if offset > 0]
+    if (
+        len(outside_samples) < config.min_refinement_side_samples
+        or len(inside_samples) < config.min_refinement_side_samples
+    ):
+        return BoundaryPoint(point=rough_point, status="fallback_rough")
+
+    dark_level = float(np.median(outside_samples))
+    bright_level = float(np.median(inside_samples))
+    if bright_level - dark_level < config.min_refinement_contrast:
+        return BoundaryPoint(point=rough_point, status="fallback_rough")
+
+    threshold = dark_level + 0.5 * (bright_level - dark_level)
+    for (previous_offset, previous_value), (current_offset, current_value) in zip(
+        profile, profile[1:], strict=False
+    ):
+        if previous_value <= threshold <= current_value:
+            return BoundaryPoint(
+                point=_crossing_point(
+                    rough_point=rough_point,
+                    inside_direction=inside_direction,
+                    previous_offset=previous_offset,
+                    previous_value=previous_value,
+                    current_offset=current_offset,
+                    current_value=current_value,
+                    threshold=threshold,
+                ),
+                status="refined",
+            )
+
+    return BoundaryPoint(point=rough_point, status="fallback_rough")
+
+
+def _crossing_point(
+    rough_point: Point,
+    inside_direction: tuple[int, int],
+    previous_offset: int,
+    previous_value: float,
+    current_offset: int,
+    current_value: float,
+    threshold: float,
+) -> Point:
+    if current_value == previous_value:
+        crossing_offset = previous_offset
+    else:
+        fraction = (threshold - previous_value) / (current_value - previous_value)
+        crossing_offset = previous_offset + fraction * (
+            current_offset - previous_offset
+        )
+
+    inside_dx, inside_dy = inside_direction
+    return Point(
+        x=rough_point.x + round(crossing_offset * inside_dx),
+        y=rough_point.y + round(crossing_offset * inside_dy),
+    )
+
+
+def _sample_boundary_profile(
+    image: np.ndarray,
+    rough_point: Point,
+    inside_direction: tuple[int, int],
+    analysis_region: RectRoi,
+    config: MeasurementConfig,
+) -> list[tuple[int, float]]:
+    profile: list[tuple[int, float]] = []
+    step = config.refinement_sampling_step_px
+    half_length = config.boundary_profile_half_length_px
+    for offset in range(-half_length, half_length + 1, step):
+        sample = _profile_sample_median(
+            image=image,
+            rough_point=rough_point,
+            inside_direction=inside_direction,
+            normal_offset=offset,
+            analysis_region=analysis_region,
+            averaging_width=config.boundary_profile_averaging_width_px,
+        )
+        if sample is not None:
+            profile.append((offset, sample))
+    return profile
+
+
+def _profile_sample_median(
+    image: np.ndarray,
+    rough_point: Point,
+    inside_direction: tuple[int, int],
+    normal_offset: int,
+    analysis_region: RectRoi,
+    averaging_width: int,
+) -> float | None:
+    inside_dx, inside_dy = inside_direction
+    tangent_dx, tangent_dy = -inside_dy, inside_dx
+    half_width = averaging_width // 2
+    values: list[float] = []
+    for tangent_offset in range(-half_width, half_width + 1):
+        x = (
+            rough_point.x
+            + normal_offset * inside_dx
+            + tangent_offset * tangent_dx
+        )
+        y = (
+            rough_point.y
+            + normal_offset * inside_dy
+            + tangent_offset * tangent_dy
+        )
+        if _point_inside_analysis_region(x, y, analysis_region):
+            values.append(float(image[y, x]))
+
+    if not values:
+        return None
+    return float(np.median(values))
+
+
+def _point_inside_analysis_region(x: int, y: int, analysis_region: RectRoi) -> bool:
+    return (
+        analysis_region.x <= x < analysis_region.x + analysis_region.width
+        and analysis_region.y <= y < analysis_region.y + analysis_region.height
+    )
 
 
 def _measure_single_metal_island(

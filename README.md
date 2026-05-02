@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、clean single Metal Island 的第一條 Measure Current tracer bullet，以及 Metal Island candidate filtering / minimal Debug View diagnostics。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、clean single Metal Island 的第一條 Measure Current tracer bullet、Metal Island candidate filtering / minimal Debug View diagnostics，以及 Rough Boundary Fallback / trace-ready refinement diagnostics。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -34,12 +34,16 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - `MIN_AREA_RATIO_TO_MEDIAN` 可透過 measurement config 覆寫；GUI 調整欄位尚未實作。
 - 如果 filtering 後沒有 Metal Island candidate，Measure 變成 `Failed`，workspace 停在 Original View，status card 顯示 `No metal candidates`。
 - clean single Metal Island 量測會產生 ordered closed Refined Boundary，並計算 TCD、BCD、Height。
+- Refined Boundary 會對 rough boundary point 取 normal-direction brightness profile，可靠的 local half maximum crossing 標記為 `refined`。
+- 如果 profile sample 不足、找不到 crossing、contrast 不足、或 bright/dark direction 不合理，該 boundary point 會使用 `fallback_rough`，不讓 Metal Island measurement 失敗。
+- 即使 fallback ratio 很高，只要 TCD / BCD / Height 可產生 reportable value，Measure status 仍為 `Measured` / measurement result status 仍為 `success`。
+- refinement diagnostics 已提供 `refined_point_count`、`fallback_point_count`、`fallback_ratio`，供 Debug View 與未來 Trace Sheet 使用。
 - TCD 使用 top 20% height region 內的最大 horizontal width。
 - BCD 使用 bottom 10% height region 內的最大 horizontal width。
 - Height 使用 Refined Boundary 內的最大 vertical chord length。
 - 成功 Measure Current 後，該圖 Measure 變成 `Measured`，Export 維持 `Not exported`，workspace 切到 Result View。
 - Result View 會顯示原圖加上 TCD / BCD / Height Measurement Lines 與一位小數值，不顯示 ROI 或 debug internals。
-- Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components。
+- Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、refined points、fallback points、fallback ratio。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
@@ -891,7 +895,9 @@ Debug View 是工程師排錯用，不是報告用。
 - kept candidates 以綠色 bbox 顯示。
 - excluded small components 以黃色 bbox 顯示。
 - excluded boundary-touch components 以紅色 bbox 顯示。
-- 下方文字顯示 kept / excluded 類別數量。
+- refined boundary points 以青色點顯示。
+- fallback boundary points 以粉紅色點顯示。
+- 下方文字顯示 kept / excluded 類別數量，以及 refined point count / fallback point count / fallback ratio。
 
 完整 Debug Image export 尚未實作。
 

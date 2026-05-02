@@ -24,6 +24,9 @@ def test_measure_clean_single_metal_island_full_image():
     assert result.analysis_region == RectRoi(x=0, y=0, width=128, height=128)
     assert result.refined_boundary.points[0] == result.refined_boundary.points[-1]
     assert len(result.refined_boundary.points) > 4
+    assert result.refined_boundary.refined_point_count > 0
+    assert result.refined_boundary.fallback_point_count == 0
+    assert result.refined_boundary.fallback_ratio == pytest.approx(0.0)
     assert result.measurements["TCD"].value_px == pytest.approx(32)
     assert result.measurements["BCD"].value_px == pytest.approx(48)
     assert result.measurements["Height"].value_px == pytest.approx(60)
@@ -47,6 +50,78 @@ def test_custom_roi_limits_the_analysis_region():
 
     assert result.status == "success"
     assert result.analysis_region == RectRoi(x=20, y=16, width=72, height=88)
+    assert result.measurements["TCD"].value_px == pytest.approx(32)
+    assert result.measurements["BCD"].value_px == pytest.approx(48)
+    assert result.measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_insufficient_refinement_samples_fall_back_without_failing_measurement():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=40,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+
+    result = measure_image(image, roi=RectRoi(x=13, y=16, width=80, height=88))
+
+    assert result.status == "success"
+    assert result.refined_boundary.fallback_point_count > 0
+    assert result.refined_boundary.refined_point_count > 0
+    assert result.refined_boundary.fallback_ratio > 0
+    assert result.measurements["TCD"].value_px == pytest.approx(32)
+    assert result.measurements["BCD"].value_px == pytest.approx(48)
+    assert result.measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_high_fallback_ratio_still_reports_successful_measurements():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=48,
+            bcd=48,
+        )
+    )
+
+    result = measure_image(image, roi=RectRoi(x=37, y=16, width=54, height=88))
+
+    assert result.status == "success"
+    assert result.refined_boundary.fallback_ratio == pytest.approx(1.0)
+    assert result.measurements["TCD"].value_px == pytest.approx(48)
+    assert result.measurements["BCD"].value_px == pytest.approx(48)
+    assert result.measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_low_contrast_refinement_falls_back_without_failing_measurement():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+
+    result = measure_image(
+        image,
+        roi=None,
+        config=MeasurementConfig(min_refinement_contrast=255),
+    )
+
+    assert result.status == "success"
+    assert result.refined_boundary.fallback_ratio == pytest.approx(1.0)
     assert result.measurements["TCD"].value_px == pytest.approx(32)
     assert result.measurements["BCD"].value_px == pytest.approx(48)
     assert result.measurements["Height"].value_px == pytest.approx(60)

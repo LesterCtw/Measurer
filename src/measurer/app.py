@@ -385,8 +385,22 @@ def _debug_to_pixmap(image: np.ndarray, result: MeasurementResult) -> QPixmap:
             result.detection.excluded_boundary_touch_components,
             QColor(255, 80, 80),
         )
+    _draw_boundary_points(painter, result)
     painter.end()
     return QPixmap.fromImage(qimage)
+
+
+def _draw_boundary_points(painter: QPainter, result: MeasurementResult) -> None:
+    for point, status in zip(
+        result.refined_boundary.points,
+        result.refined_boundary.point_statuses,
+        strict=False,
+    ):
+        if status == "fallback_rough":
+            painter.setPen(QPen(QColor(255, 96, 220), 2))
+        else:
+            painter.setPen(QPen(QColor(120, 240, 255), 2))
+        painter.drawEllipse(point.x - 1, point.y - 1, 3, 3)
 
 
 def _draw_component_boxes(
@@ -429,6 +443,9 @@ def _format_debug_values(result: MeasurementResult) -> str:
                 "Excluded boundary-touch components: "
                 f"{len(result.detection.excluded_boundary_touch_components)}"
             ),
+            f"Refined points: {result.refined_boundary.refined_point_count}",
+            f"Fallback points: {result.refined_boundary.fallback_point_count}",
+            f"Fallback ratio: {result.refined_boundary.fallback_ratio * 100:.1f}%",
         ]
     )
 
