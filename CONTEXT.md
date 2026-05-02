@@ -25,7 +25,7 @@ A user-drawn region that limits the Analysis Region but is not itself a reportin
 _Avoid_: sample, measurement group
 
 **Refined Boundary**:
-The final boundary used for official measurements, derived from local image intensity transition rather than directly from the Otsu contour.
+The final ordered closed boundary used for official measurements, derived from local image intensity transition rather than directly from the Otsu contour.
 _Avoid_: Otsu boundary, mask contour
 
 **Rough Boundary Fallback**:
@@ -55,6 +55,10 @@ _Avoid_: vertical bounding-box gap
 **Measurement Line**:
 The final line segment whose length becomes one reported measurement value.
 _Avoid_: raw scan line
+
+**Measurement Status**:
+Whether a final measurement produced a reportable value, independent of diagnostic quality indicators.
+_Avoid_: quality score, confidence
 
 **Result View**:
 The GUI view that shows the original image with final Measurement Lines and values.
@@ -91,6 +95,7 @@ _Avoid_: tag, class, folder
 - Adjacent **Metal Islands** in the same row can produce **Horizontal Space**.
 - Adjacent **Metal Islands** in the same column can produce **Vertical Space**.
 - A **Measurement Line** represents one final TCD, BCD, Height, Horizontal Space, or Vertical Space value.
+- A **Measurement Status** reports value availability; fallback ratio and other diagnostics belong to the **Trace Sheet**.
 - A **Result View** and **Result Image** show official measurements without ROI or debug internals.
 - A **Debug View** and **Debug Image** show algorithm internals and may show ROI.
 - A **Trace Sheet** stores secondary measurement context that does not belong in the main Measurements sheet.
@@ -110,3 +115,4 @@ _Avoid_: tag, class, folder
 - "Height" must not mean bounding-box y-extent. Resolved: **Height** is the maximum vertical chord length inside the Refined Boundary.
 - "ROI result" is misleading. Resolved: **ROI** only limits the **Analysis Region**; output is organized by image and Group.
 - "Overlay", "Annotated Image", and "Details" were ambiguous UI/export names. Resolved: use **Result View**, **Result Image**, and **Trace Sheet**.
+- "success" could mean either reportable value or high diagnostic quality. Resolved: **Measurement Status** `success` means a reportable value exists; fallback-heavy boundaries are still `success` and diagnostics go in the **Trace Sheet**.
