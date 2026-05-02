@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice，以及 clean single Metal Island 的第一條 Measure Current tracer bullet。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、clean single Metal Island 的第一條 Measure Current tracer bullet，以及 Metal Island candidate filtering / minimal Debug View diagnostics。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -29,19 +29,24 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - Measure Current 支援 clean synthetic STEM ZC Image 中一個 bright Metal Island on dark LK 的 tracer bullet。
 - Measure Current 只量測目前選取圖片，不自動切下一張，也不直接寫 output files。
 - 沒有 ROI 時，Measure Current 使用 full image 作為 Analysis Region；有 Custom ROI 時，只分析 ROI 內像素。
+- Measure Current 會在 Analysis Region 內用 Otsu rough mask 做 connected component detection。
+- candidate filtering 已支援 `HARD_MIN_COMPONENT_AREA_PX = 100`、median-area relative threshold default `MIN_AREA_RATIO_TO_MEDIAN = 0.03`，以及 bbox 距離 Analysis Region boundary <= 1 px 的 boundary-touch exclusion。
+- `MIN_AREA_RATIO_TO_MEDIAN` 可透過 measurement config 覆寫；GUI 調整欄位尚未實作。
+- 如果 filtering 後沒有 Metal Island candidate，Measure 變成 `Failed`，workspace 停在 Original View，status card 顯示 `No metal candidates`。
 - clean single Metal Island 量測會產生 ordered closed Refined Boundary，並計算 TCD、BCD、Height。
 - TCD 使用 top 20% height region 內的最大 horizontal width。
 - BCD 使用 bottom 10% height region 內的最大 horizontal width。
 - Height 使用 Refined Boundary 內的最大 vertical chord length。
 - 成功 Measure Current 後，該圖 Measure 變成 `Measured`，Export 維持 `Not exported`，workspace 切到 Result View。
 - Result View 會顯示原圖加上 TCD / BCD / Height Measurement Lines 與一位小數值，不顯示 ROI 或 debug internals。
+- Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
   - Measure = `Pending`
   - Export = `Not exported`
 
-目前尚未實作多 Metal Islands、Horizontal Space、Vertical Space、Box Plot、Debug View、Export、`.dm3` input、metadata scale parser，以及真實 STEM ZC 樣本 validation。
+目前尚未實作多 Metal Islands、Horizontal Space、Vertical Space、Box Plot、完整 Debug Image / export-grade diagnostics、Export、`.dm3` input、metadata scale parser，以及真實 STEM ZC 樣本 validation。
 
 ## 開發指令
 
@@ -420,9 +425,10 @@ Area filtering：
 5. MIN_AREA_RATIO_TO_MEDIAN default = 0.03
 ```
 
-GUI 可調：
+目前實作：
 
-- `MIN_AREA_RATIO_TO_MEDIAN`
+- `MIN_AREA_RATIO_TO_MEDIAN` 可透過 measurement config 覆寫，default = `0.03`。
+- GUI 調整欄位尚未實作。
 
 後台 config 控制：
 
@@ -878,6 +884,16 @@ Debug 功能要稍微藏起來，不破壞主 UI 簡潔性。
 ## Debug View / Debug Image
 
 Debug View 是工程師排錯用，不是報告用。
+
+目前 GUI Debug View 已實作最小 diagnostics：
+
+- rough mask 以藍色 tint 顯示。
+- kept candidates 以綠色 bbox 顯示。
+- excluded small components 以黃色 bbox 顯示。
+- excluded boundary-touch components 以紅色 bbox 顯示。
+- 下方文字顯示 kept / excluded 類別數量。
+
+完整 Debug Image export 尚未實作。
 
 MVS Debug Image 使用 2x2 panel：
 

@@ -7,11 +7,22 @@ import numpy as np
 
 from measurer.image_queue import RectRoi
 
+HARD_MIN_COMPONENT_AREA_PX = 100
+MIN_AREA_RATIO_TO_MEDIAN = 0.03
+BOUNDARY_TOUCH_MARGIN_PX = 1
+
 
 @dataclass(frozen=True)
 class Point:
     x: int
     y: int
+
+
+@dataclass(frozen=True)
+class MeasurementConfig:
+    hard_min_component_area_px: int = HARD_MIN_COMPONENT_AREA_PX
+    min_area_ratio_to_median: float = MIN_AREA_RATIO_TO_MEDIAN
+    boundary_touch_margin_px: int = BOUNDARY_TOUCH_MARGIN_PX
 
 
 @dataclass(frozen=True)
@@ -33,14 +44,35 @@ class RefinedBoundary:
 
 
 @dataclass(frozen=True)
+class ComponentDiagnostic:
+    area_px: int
+    bbox: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class DetectionDiagnostics:
+    rough_mask: np.ndarray
+    kept_candidates: list[ComponentDiagnostic]
+    excluded_small_components: list[ComponentDiagnostic]
+    excluded_boundary_touch_components: list[ComponentDiagnostic]
+
+
+@dataclass(frozen=True)
 class MeasurementResult:
     status: str
     analysis_region: RectRoi
     refined_boundary: RefinedBoundary
     measurements: dict[str, Measurement]
+    failure_reason: str = ""
+    detection: DetectionDiagnostics | None = None
 
 
-def measure_image(image: np.ndarray, roi: RectRoi | None) -> MeasurementResult:
+def measure_image(
+    image: np.ndarray,
+    roi: RectRoi | None,
+    config: MeasurementConfig | None = None,
+) -> MeasurementResult:
+    config = config or MeasurementConfig()
     analysis_region = _analysis_region_for(image, roi)
     region = image[
         analysis_region.y : analysis_region.y + analysis_region.height,
@@ -48,25 +80,29 @@ def measure_image(image: np.ndarray, roi: RectRoi | None) -> MeasurementResult:
     ]
     threshold = _otsu_threshold(region)
     mask = region > threshold
-    if not np.any(mask):
+    detection, candidate_mask = _detect_metal_candidates(mask, config)
+    if candidate_mask is None:
         return MeasurementResult(
             status="failed",
             analysis_region=analysis_region,
             refined_boundary=RefinedBoundary(points=[]),
             measurements={},
+            failure_reason="No metal candidates",
+            detection=detection,
         )
 
-    ys, xs = np.nonzero(mask)
+    ys, xs = np.nonzero(candidate_mask)
     global_ys = ys + analysis_region.y
     global_xs = xs + analysis_region.x
     spans = _row_spans(global_xs, global_ys)
     boundary = RefinedBoundary(points=_closed_boundary_from_spans(spans))
-    measurements = _measure_single_metal_island(spans, mask, analysis_region)
+    measurements = _measure_single_metal_island(spans, candidate_mask, analysis_region)
     return MeasurementResult(
         status="success",
         analysis_region=analysis_region,
         refined_boundary=boundary,
         measurements=measurements,
+        detection=detection,
     )
 
 
@@ -112,6 +148,136 @@ def _row_spans(xs: np.ndarray, ys: np.ndarray) -> dict[int, tuple[int, int]]:
         row_xs = xs[ys == y]
         spans[y] = (int(np.min(row_xs)), int(np.max(row_xs)))
     return spans
+
+
+def _detect_metal_candidates(
+    mask: np.ndarray, config: MeasurementConfig
+) -> tuple[DetectionDiagnostics, np.ndarray | None]:
+    components = _connected_components(mask)
+    hard_kept: list[_Component] = []
+    excluded_small: list[_Component] = []
+    for component in components:
+        if component.area_px < config.hard_min_component_area_px:
+            excluded_small.append(component)
+        else:
+            hard_kept.append(component)
+
+    if hard_kept:
+        median_area = float(np.median([component.area_px for component in hard_kept]))
+        relative_min_area = median_area * config.min_area_ratio_to_median
+        area_kept = []
+        for component in hard_kept:
+            if component.area_px < relative_min_area:
+                excluded_small.append(component)
+            else:
+                area_kept.append(component)
+    else:
+        area_kept = []
+
+    kept_candidates: list[_Component] = []
+    excluded_boundary_touch: list[_Component] = []
+    for component in area_kept:
+        if _touches_analysis_boundary(component, mask.shape, config):
+            excluded_boundary_touch.append(component)
+        else:
+            kept_candidates.append(component)
+
+    diagnostics = DetectionDiagnostics(
+        rough_mask=mask.copy(),
+        kept_candidates=[_component_diagnostic(component) for component in kept_candidates],
+        excluded_small_components=[
+            _component_diagnostic(component) for component in excluded_small
+        ],
+        excluded_boundary_touch_components=[
+            _component_diagnostic(component) for component in excluded_boundary_touch
+        ],
+    )
+
+    if not kept_candidates:
+        return diagnostics, None
+
+    main_candidate = max(kept_candidates, key=lambda component: component.area_px)
+    candidate_mask = np.zeros(mask.shape, dtype=bool)
+    candidate_mask[main_candidate.local_ys, main_candidate.local_xs] = True
+    return diagnostics, candidate_mask
+
+
+@dataclass(frozen=True)
+class _Component:
+    local_xs: np.ndarray
+    local_ys: np.ndarray
+
+    @property
+    def area_px(self) -> int:
+        return int(self.local_xs.size)
+
+    @property
+    def bbox(self) -> tuple[int, int, int, int]:
+        return (
+            int(np.min(self.local_xs)),
+            int(np.min(self.local_ys)),
+            int(np.max(self.local_xs)),
+            int(np.max(self.local_ys)),
+        )
+
+
+def _connected_components(mask: np.ndarray) -> list[_Component]:
+    height, width = mask.shape
+    visited = np.zeros(mask.shape, dtype=bool)
+    components: list[_Component] = []
+
+    for start_y, start_x in zip(*np.nonzero(mask), strict=False):
+        if visited[start_y, start_x]:
+            continue
+
+        stack = [(int(start_x), int(start_y))]
+        xs: list[int] = []
+        ys: list[int] = []
+        visited[start_y, start_x] = True
+        while stack:
+            x, y = stack.pop()
+            xs.append(x)
+            ys.append(y)
+            for next_x, next_y in (
+                (x - 1, y),
+                (x + 1, y),
+                (x, y - 1),
+                (x, y + 1),
+            ):
+                if (
+                    0 <= next_x < width
+                    and 0 <= next_y < height
+                    and mask[next_y, next_x]
+                    and not visited[next_y, next_x]
+                ):
+                    visited[next_y, next_x] = True
+                    stack.append((next_x, next_y))
+
+        components.append(
+            _Component(
+                local_xs=np.asarray(xs, dtype=np.int32),
+                local_ys=np.asarray(ys, dtype=np.int32),
+            )
+        )
+
+    return components
+
+
+def _touches_analysis_boundary(
+    component: _Component, mask_shape: tuple[int, int], config: MeasurementConfig
+) -> bool:
+    height, width = mask_shape
+    min_x, min_y, max_x, max_y = component.bbox
+    return (
+        min_x <= config.boundary_touch_margin_px
+        or min_y <= config.boundary_touch_margin_px
+        or max_x >= width - 1 - config.boundary_touch_margin_px
+        or max_y >= height - 1 - config.boundary_touch_margin_px
+    )
+
+
+def _component_diagnostic(component: _Component) -> ComponentDiagnostic:
+    return ComponentDiagnostic(area_px=component.area_px, bbox=component.bbox)
 
 
 def _closed_boundary_from_spans(spans: dict[int, tuple[int, int]]) -> list[Point]:

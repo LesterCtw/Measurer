@@ -136,3 +136,75 @@ def test_app_measure_current_updates_only_selected_image_and_shows_result_view(
     assert "TCD 32.0 px" in window.result_values_label.text()
     assert "BCD 48.0 px" in window.result_values_label.text()
     assert "Height 60.0 px" in window.result_values_label.text()
+
+
+def test_app_failed_measure_current_stays_on_original_view_with_reason(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "no_candidates.tif"
+    tifffile.imwrite(image_path, np.ones((128, 128), dtype=np.uint8) * 20)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+
+    assert window.file_table.item(0, 4).text() == "Failed"
+    assert window.current_view_mode == "Original View"
+    assert window.result_values_label.text() == ""
+    assert window.status_label.text() == "No metal candidates"
+
+
+def test_app_debug_view_shows_candidate_filtering_diagnostics(qapp, tmp_path):
+    image_path = tmp_path / "contamination.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=160,
+            image_height=128,
+            center_x=80,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    image[8:14, 8:14] = 255
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.debug_view_button.click()
+
+    assert window.current_view_mode == "Debug View"
+    assert window.image_label.pixmap() is not None
+    assert "Kept candidates: 1" in window.result_values_label.text()
+    assert "Excluded small components: 1" in window.result_values_label.text()
+    assert "Excluded boundary-touch components: 0" in window.result_values_label.text()
+
+
+def test_app_debug_view_shows_boundary_touch_diagnostics_after_failure(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "boundary_touch.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=16,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.debug_view_button.click()
+
+    assert window.file_table.item(0, 4).text() == "Failed"
+    assert window.current_view_mode == "Debug View"
+    assert "Kept candidates: 0" in window.result_values_label.text()
+    assert "Excluded boundary-touch components: 1" in window.result_values_label.text()

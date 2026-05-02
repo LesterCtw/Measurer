@@ -70,6 +70,12 @@ class MeasurerWindow(QMainWindow):
         self.clear_roi_button.clicked.connect(self._clear_selected_roi)
         self.measure_current_button = QPushButton("Measure Current")
         self.measure_current_button.clicked.connect(self._measure_selected_image)
+        self.original_view_button = QPushButton("Original")
+        self.original_view_button.clicked.connect(self._show_original_view)
+        self.result_view_button = QPushButton("Result")
+        self.result_view_button.clicked.connect(self._show_result_view)
+        self.debug_view_button = QPushButton("Debug")
+        self.debug_view_button.clicked.connect(self._show_debug_view)
         self.file_table = QTableWidget(0, 6)
         self.file_table.setHorizontalHeaderLabels(
             ["Select", "File", "Group", "ROI", "Measure", "Export"]
@@ -97,7 +103,13 @@ class MeasurerWindow(QMainWindow):
         controls.addWidget(self.file_table)
         controls.addWidget(self.status_label)
 
+        view_controls = QHBoxLayout()
+        view_controls.addWidget(self.original_view_button)
+        view_controls.addWidget(self.result_view_button)
+        view_controls.addWidget(self.debug_view_button)
+
         workspace = QVBoxLayout()
+        workspace.addLayout(view_controls)
         workspace.addWidget(self.image_label)
         workspace.addWidget(self.result_values_label)
 
@@ -200,10 +212,10 @@ class MeasurerWindow(QMainWindow):
         row = self.queue.rows[row_index]
         result = measure_image(row.image, row.roi)
         if result.status != "success":
-            self.queue.record_measurement_failure(row_index)
+            self.queue.record_measurement_failure(row_index, result)
             self._refresh_file_table()
             self.file_table.setCurrentCell(row_index, 1)
-            self.status_label.setText("Measurement failed.")
+            self.status_label.setText(result.failure_reason or "Measurement failed.")
             return
 
         self.queue.record_measurement_result(row_index, result)
@@ -214,6 +226,44 @@ class MeasurerWindow(QMainWindow):
         self.result_values_label.setText(_format_result_values(result, scale.nm_per_px))
         self.current_view_mode = "Result View"
         self.status_label.setText("Measurement completed.")
+
+    def _show_original_view(self) -> None:
+        row_index = self.file_table.currentRow()
+        if row_index < 0 or row_index >= len(self.queue.rows):
+            return
+
+        self.image_label.setPixmap(_array_to_pixmap(self.queue.rows[row_index].image))
+        self.result_values_label.setText("")
+        self.current_view_mode = "Original View"
+
+    def _show_result_view(self) -> None:
+        row_index = self.file_table.currentRow()
+        if row_index < 0 or row_index >= len(self.queue.rows):
+            return
+
+        row = self.queue.rows[row_index]
+        if not isinstance(row.measurement_results, MeasurementResult):
+            return
+
+        scale = self.queue.resolve_scale(row_index)
+        self.image_label.setPixmap(_result_to_pixmap(row.image, row.measurement_results))
+        self.result_values_label.setText(
+            _format_result_values(row.measurement_results, scale.nm_per_px)
+        )
+        self.current_view_mode = "Result View"
+
+    def _show_debug_view(self) -> None:
+        row_index = self.file_table.currentRow()
+        if row_index < 0 or row_index >= len(self.queue.rows):
+            return
+
+        row = self.queue.rows[row_index]
+        if not isinstance(row.measurement_debug, MeasurementResult):
+            return
+
+        self.image_label.setPixmap(_debug_to_pixmap(row.image, row.measurement_debug))
+        self.result_values_label.setText(_format_debug_values(row.measurement_debug))
+        self.current_view_mode = "Debug View"
 
     def _refresh_file_table(self) -> None:
         self.file_table.setRowCount(len(self.queue.rows))
@@ -292,6 +342,67 @@ def _result_to_pixmap(image: np.ndarray, result: MeasurementResult) -> QPixmap:
     return QPixmap.fromImage(qimage)
 
 
+def _debug_to_pixmap(image: np.ndarray, result: MeasurementResult) -> QPixmap:
+    display = _normalize_to_uint8(image)
+    height, width = display.shape
+    rgb = np.ascontiguousarray(np.dstack([display, display, display]))
+    if result.detection is not None:
+        region = result.analysis_region
+        rough_mask = result.detection.rough_mask
+        region_rgb = rgb[
+            region.y : region.y + region.height,
+            region.x : region.x + region.width,
+        ]
+        region_rgb[rough_mask] = (
+            region_rgb[rough_mask].astype(np.uint16) // 2
+            + np.asarray([24, 96, 180], dtype=np.uint16)
+        ).astype(np.uint8)
+
+    qimage = QImage(
+        rgb.data,
+        width,
+        height,
+        width * 3,
+        QImage.Format.Format_RGB888,
+    ).copy()
+    painter = QPainter(qimage)
+    if result.detection is not None:
+        _draw_component_boxes(
+            painter,
+            result.analysis_region,
+            result.detection.kept_candidates,
+            QColor(80, 220, 120),
+        )
+        _draw_component_boxes(
+            painter,
+            result.analysis_region,
+            result.detection.excluded_small_components,
+            QColor(255, 190, 64),
+        )
+        _draw_component_boxes(
+            painter,
+            result.analysis_region,
+            result.detection.excluded_boundary_touch_components,
+            QColor(255, 80, 80),
+        )
+    painter.end()
+    return QPixmap.fromImage(qimage)
+
+
+def _draw_component_boxes(
+    painter, analysis_region: RectRoi, components, color: QColor
+) -> None:
+    painter.setPen(QPen(color, 2))
+    for component in components:
+        min_x, min_y, max_x, max_y = component.bbox
+        painter.drawRect(
+            analysis_region.x + min_x,
+            analysis_region.y + min_y,
+            max_x - min_x + 1,
+            max_y - min_y + 1,
+        )
+
+
 def _format_result_values(
     result: MeasurementResult, nm_per_px: float | None
 ) -> str:
@@ -300,6 +411,25 @@ def _format_result_values(
     return " | ".join(
         f"{name} {measurement.value_px * scale:.1f} {unit}"
         for name, measurement in result.measurements.items()
+    )
+
+
+def _format_debug_values(result: MeasurementResult) -> str:
+    if result.detection is None:
+        return ""
+
+    return " | ".join(
+        [
+            f"Kept candidates: {len(result.detection.kept_candidates)}",
+            (
+                "Excluded small components: "
+                f"{len(result.detection.excluded_small_components)}"
+            ),
+            (
+                "Excluded boundary-touch components: "
+                f"{len(result.detection.excluded_boundary_touch_components)}"
+            ),
+        ]
     )
 
 

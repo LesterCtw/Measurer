@@ -35,6 +35,7 @@ class QueueRow:
     measure_status: str = "Pending"
     export_status: str = "Not exported"
     measurement_results: object | None = None
+    measurement_debug: object | None = None
 
 
 @dataclass(frozen=True)
@@ -171,9 +172,12 @@ class ImageQueue:
             measure_status="Measured",
             export_status="Not exported",
             measurement_results=result,
+            measurement_debug=result,
         )
 
-    def record_measurement_failure(self, row_index: int) -> None:
+    def record_measurement_failure(
+        self, row_index: int, debug_result: object | None = None
+    ) -> None:
         if row_index < 0 or row_index >= len(self.rows):
             return
 
@@ -182,6 +186,7 @@ class ImageQueue:
             measure_status="Failed",
             export_status="Not exported",
             measurement_results=None,
+            measurement_debug=debug_result,
         )
 
     def set_roi(self, row_index: int, roi: RectRoi) -> bool:
@@ -200,6 +205,7 @@ class ImageQueue:
             measure_status="Pending",
             export_status="Not exported",
             measurement_results=None,
+            measurement_debug=None,
         )
         return True
 
@@ -214,6 +220,7 @@ class ImageQueue:
             measure_status="Pending",
             export_status="Not exported",
             measurement_results=None,
+            measurement_debug=None,
         )
         return True
 
