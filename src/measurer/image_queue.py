@@ -266,23 +266,53 @@ class ImageQueue:
 def _read_image(path: Path) -> LoadedImage:
     if path.suffix.lower() == ".dm3":
         return _read_dm3_image(path)
-    return LoadedImage(image=_read_tiff_image(path))
+    return _read_tiff_image(path)
 
 
-def _read_tiff_image(path: Path) -> np.ndarray:
+def _read_tiff_image(path: Path) -> LoadedImage:
     with tifffile.TiffFile(path) as tiff:
         if len(tiff.pages) != 1:
-            return np.asarray([])
+            return LoadedImage(image=np.asarray([]))
         page = tiff.pages[0]
         image = tiff.asarray()
+        metadata_nm_per_px = _metadata_nm_per_px_from_tiff_page(page)
 
     if (
         image.ndim == 3
         and image.shape[-1] in (3, 4)
         and page.samplesperpixel in (3, 4)
     ):
-        return _to_grayscale(image)
-    return image
+        image = _to_grayscale(image)
+    return LoadedImage(image=image, metadata_nm_per_px=metadata_nm_per_px)
+
+
+def _metadata_nm_per_px_from_tiff_page(page: tifffile.TiffPage) -> float | None:
+    try:
+        resolution_unit = int(page.tags["ResolutionUnit"].value)
+        x_resolution = _ratio_to_float(page.tags["XResolution"].value)
+        y_resolution = _ratio_to_float(page.tags["YResolution"].value)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+    if x_resolution <= 0 or y_resolution <= 0:
+        return None
+    if not np.allclose([x_resolution, y_resolution], x_resolution):
+        return None
+
+    if resolution_unit == 2:
+        nm_per_unit = 25_400_000.0
+    elif resolution_unit == 3:
+        nm_per_unit = 10_000_000.0
+    else:
+        return None
+    return nm_per_unit / x_resolution
+
+
+def _ratio_to_float(value: object) -> float:
+    if isinstance(value, tuple) and len(value) == 2:
+        numerator, denominator = value
+        return float(numerator) / float(denominator)
+    return float(value)
 
 
 def _read_dm3_image(path: Path) -> LoadedImage:

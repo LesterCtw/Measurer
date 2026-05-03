@@ -152,6 +152,27 @@ def test_add_images_accepts_valid_2d_tiff(tmp_path):
     assert row.image.shape == (4, 4)
 
 
+def test_add_images_reads_tiff_centimeter_resolution_as_nm_per_px(tmp_path):
+    image_path = tmp_path / "metadata_scale.tif"
+    image = np.arange(16, dtype=np.uint8).reshape(4, 4)
+    nm_per_px = 0.8
+    pixels_per_cm = 10_000_000 / nm_per_px
+    tifffile.imwrite(
+        image_path,
+        image,
+        resolution=(pixels_per_cm, pixels_per_cm),
+        resolutionunit="CENTIMETER",
+    )
+
+    queue = ImageQueue()
+    summary = queue.add_images([image_path])
+
+    assert summary.added_count == 1
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="metadata", nm_per_px=0.8
+    )
+
+
 def test_add_images_converts_rgb_tiff_to_grayscale(tmp_path):
     image_path = tmp_path / "rgb_stem_zc.tif"
     rgb = np.zeros((3, 2, 3), dtype=np.uint8)

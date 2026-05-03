@@ -14,6 +14,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - 左側 File Queue / control panel 與右側 fit-to-window image workspace。
 - Add Images 支援 single 2D TIFF 與 `rosettasciio` 可讀取的 single 2D `.dm3`。
 - 8-bit / 16-bit grayscale TIFF 可加入 queue。
+- TIFF 若有一致的 X/Y resolution metadata，會換算成 metadata `nm / pixel`。
 - RGB/RGBA TIFF 直接轉 grayscale，不顯示 warning。
 - multi-page TIFF / unsupported `.dm3` shape / 3D stack / unreadable image data 在 Add Images 時 skip，不加入 queue。
 - Add Images batch summary 顯示 added / skipped 與原因數量。
@@ -177,6 +178,7 @@ Synthetic image generator 需要產生：
 - `.dm3` parser 先使用 `rosettasciio`，之後依公司實際樣本校正 metadata scale。
 - 如果 `.dm3` metadata scale 讀不到，仍可量測，結果用 px。
 - `.dm3` 讀得到 image data 但讀不到 metadata scale 時，不跳 warning，不阻止 Measure / Export；Result View / Excel 顯示單位 `px`，Trace Sheet 記錄 `scale_source = px`。
+- TIFF resolution metadata 可讀取時會作為 metadata scale；若 X/Y resolution 不一致或缺少 resolution unit，仍可量測並依一般 scale fallback 規則處理。
 - GUI Box Plot 不允許混合 nm 與 px。
 - Excel Summary 不混合 nm 與 px；若同一次 Export 同時有 nm 與 px，依 `unit` 分開統計。
 - Scale 優先序為 metadata scale、per-image manual override、batch manual default、px；metadata scale 不可手動覆寫。
