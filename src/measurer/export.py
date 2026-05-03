@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QApplication
 
-from measurer.image_queue import ImageQueue
+from measurer.image_queue import ImageQueue, RoiSelection
 from measurer.measurement import Measurement, MeasurementResult
 
 
@@ -300,7 +300,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
                     result=result,
                     scale_source=scale_resolution.source,
                     scale_nm_per_px=scale_resolution.nm_per_px,
-                    roi_type="rectangle" if not row.roi.is_empty else "full_image",
+                    roi_type=_roi_type(row.roi),
                 )
             )
 
@@ -366,6 +366,16 @@ def _trace_row(
         fallback_count,
         fallback_ratio,
     ]
+
+
+def _roi_type(roi: RoiSelection) -> str:
+    if roi.is_empty:
+        return "full_image"
+    if len(roi.rectangles) == 1 and not roi.polygons:
+        return "rectangle"
+    if len(roi.polygons) == 1 and not roi.rectangles:
+        return "polygon"
+    return "roi_union"
 
 
 def _refinement_summary(

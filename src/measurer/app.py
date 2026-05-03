@@ -29,7 +29,13 @@ from PySide6.QtWidgets import (
 
 from measurer.app_icon import load_application_icon
 from measurer.export import OverwriteSummary, export_measured_batch
-from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi, RoiSelection
+from measurer.image_queue import (
+    AddImagesSummary,
+    ImageQueue,
+    PolygonRoi,
+    RectRoi,
+    RoiSelection,
+)
 from measurer.image_queue import roi_union_area_px
 from measurer.measurement import (
     HARD_MIN_COMPONENT_AREA_PX,
@@ -65,18 +71,21 @@ class BoxPlotPoint:
 
 
 class ImageCanvas(QWidget):
-    def __init__(self, roi_callback) -> None:
+    def __init__(self, roi_callback, polygon_roi_callback) -> None:
         super().__init__()
         self._roi_callback = roi_callback
+        self._polygon_roi_callback = polygon_roi_callback
         self._pixmap: QPixmap | None = None
         self._roi = RoiSelection()
         self._show_roi = False
+        self._roi_mode = "rectangle"
         self._measurement_result: MeasurementResult | None = None
         self._measurement_nm_per_px: float | None = None
         self._box_plot_points: list[BoxPlotPoint] | None = None
         self._box_plot_warning = ""
         self._drag_start: QPoint | None = None
         self._drag_current: QPoint | None = None
+        self._polygon_points: list[QPoint] = []
         self.setObjectName("ImageCanvas")
         self.setMinimumSize(520, 360)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -88,6 +97,7 @@ class ImageCanvas(QWidget):
         self._box_plot_warning = ""
         self._drag_start = None
         self._drag_current = None
+        self._polygon_points = []
         self.update()
 
     def pixmap(self) -> QPixmap | None:
@@ -98,6 +108,13 @@ class ImageCanvas(QWidget):
             roi = RoiSelection()
         self._roi = roi
         self._show_roi = visible
+        self.update()
+
+    def set_roi_mode(self, mode: str) -> None:
+        self._roi_mode = mode
+        self._drag_start = None
+        self._drag_current = None
+        self._polygon_points = []
         self.update()
 
     def set_measurement_overlay(
@@ -152,22 +169,30 @@ class ImageCanvas(QWidget):
         if self._show_roi and not self._roi.is_empty:
             for roi in self._roi.rectangles:
                 self._draw_roi(painter, roi, QColor("#40c4ff"))
+            for roi in self._roi.polygons:
+                self._draw_polygon_roi(painter, roi, QColor("#40c4ff"))
 
         preview = self.roi_preview()
         if preview is not None:
             self._draw_roi(painter, preview, QColor("#40c4ff"), preview=True)
+        if self._polygon_points:
+            self._draw_polygon_preview(painter, QColor("#40c4ff"))
 
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.MouseButton.LeftButton or self._pixmap is None:
             return
         image_point = self._widget_to_image_point(event.position().toPoint())
         if image_point is not None:
+            if self._roi_mode == "polygon":
+                self._polygon_points.append(image_point)
+                self.update()
+                return
             self._drag_start = image_point
             self._drag_current = image_point
             self.update()
 
     def mouseMoveEvent(self, event) -> None:
-        if self._drag_start is None:
+        if self._drag_start is None or self._roi_mode != "rectangle":
             return
         image_point = self._widget_to_image_point(event.position().toPoint(), clamp=True)
         if image_point is not None:
@@ -175,7 +200,11 @@ class ImageCanvas(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._drag_start is None or event.button() != Qt.MouseButton.LeftButton:
+        if (
+            self._roi_mode != "rectangle"
+            or self._drag_start is None
+            or event.button() != Qt.MouseButton.LeftButton
+        ):
             return
 
         image_point = self._widget_to_image_point(event.position().toPoint(), clamp=True)
@@ -187,6 +216,25 @@ class ImageCanvas(QWidget):
         self.update()
         if preview is not None and preview.width > 0 and preview.height > 0:
             self._roi_callback(preview.x, preview.y, preview.width, preview.height)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if (
+            self._roi_mode != "polygon"
+            or event.button() != Qt.MouseButton.LeftButton
+            or self._pixmap is None
+        ):
+            return
+
+        image_point = self._widget_to_image_point(event.position().toPoint())
+        if image_point is None:
+            return
+        if not self._polygon_points or self._polygon_points[-1] != image_point:
+            self._polygon_points.append(image_point)
+        points = tuple((point.x(), point.y()) for point in self._polygon_points)
+        self._polygon_points = []
+        self.update()
+        if len(set(points)) >= 3:
+            self._polygon_roi_callback(points)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         self.update()
@@ -263,6 +311,27 @@ class ImageCanvas(QWidget):
             )
 
         painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    def _draw_polygon_roi(
+        self, painter: QPainter, roi: PolygonRoi, color: QColor, *, preview: bool = False
+    ) -> None:
+        if len(roi.points) < 2:
+            return
+
+        pen = QPen(color, 2)
+        if preview:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        points = [self._image_to_widget_point(x, y) for x, y in roi.points]
+        for start, end in zip(points, points[1:], strict=False):
+            painter.drawLine(start, end)
+        if not preview and len(points) >= 3:
+            painter.drawLine(points[-1], points[0])
+
+    def _draw_polygon_preview(self, painter: QPainter, color: QColor) -> None:
+        points = tuple((point.x(), point.y()) for point in self._polygon_points)
+        self._draw_polygon_roi(painter, PolygonRoi(points), color, preview=True)
 
     def _roi_to_widget_rect(self, roi: RectRoi) -> QRect:
         image_rect = self._image_rect()
@@ -448,6 +517,13 @@ class MeasurerWindow(QMainWindow):
         self.scale_input.setPlaceholderText("nm / pixel")
         self.scale_input.editingFinished.connect(self._apply_scale_to_selected_image)
         self.scale_error_label = QLabel("")
+        self.rectangle_roi_mode_button = QPushButton("Rectangle")
+        self.rectangle_roi_mode_button.setCheckable(True)
+        self.rectangle_roi_mode_button.setChecked(True)
+        self.rectangle_roi_mode_button.clicked.connect(self._use_rectangle_roi_mode)
+        self.polygon_roi_mode_button = QPushButton("Polygon")
+        self.polygon_roi_mode_button.setCheckable(True)
+        self.polygon_roi_mode_button.clicked.connect(self._use_polygon_roi_mode)
         self.undo_roi_button = QPushButton("Undo ROI")
         self.undo_roi_button.clicked.connect(self._undo_selected_roi)
         self.clear_roi_button = QPushButton("Clear ROI")
@@ -512,7 +588,9 @@ class MeasurerWindow(QMainWindow):
         self.result_values_label = QLabel("")
         self.result_values_label.setObjectName("ResultValues")
         self.result_values_label.setWordWrap(True)
-        self.image_label = ImageCanvas(self.set_selected_roi)
+        self.image_label = ImageCanvas(
+            self.set_selected_roi, self.add_selected_polygon_roi
+        )
         self.current_view_mode = "Original View"
         self.box_plot_type_checkboxes: dict[str, QCheckBox] = {}
         self.box_plot_select_all_checkbox = QCheckBox("All")
@@ -531,6 +609,11 @@ class MeasurerWindow(QMainWindow):
         controls.addWidget(self.add_images_button)
         controls.addWidget(self.scale_input)
         controls.addWidget(self.scale_error_label)
+        roi_mode_controls = QHBoxLayout()
+        roi_mode_controls.setSpacing(8)
+        roi_mode_controls.addWidget(self.rectangle_roi_mode_button)
+        roi_mode_controls.addWidget(self.polygon_roi_mode_button)
+        controls.addLayout(roi_mode_controls)
         controls.addWidget(self.undo_roi_button)
         controls.addWidget(self.clear_roi_button)
         controls.addWidget(self.measure_current_button)
@@ -650,6 +733,26 @@ class MeasurerWindow(QMainWindow):
             self.file_table.setCurrentCell(row_index, 1)
             self._select_image(row_index)
         return updated
+
+    def add_selected_polygon_roi(self, points: tuple[tuple[int, int], ...]) -> bool:
+        row_index = self.file_table.currentRow()
+        if row_index < 0:
+            return False
+
+        updated = self.queue.add_polygon_roi(row_index, PolygonRoi(points=points))
+        if updated:
+            self._refresh_file_table()
+            self.file_table.setCurrentCell(row_index, 1)
+            self._select_image(row_index)
+        return updated
+
+    def _use_rectangle_roi_mode(self) -> None:
+        self.image_label.set_roi_mode("rectangle")
+        self._sync_roi_mode_buttons("rectangle")
+
+    def _use_polygon_roi_mode(self) -> None:
+        self.image_label.set_roi_mode("polygon")
+        self._sync_roi_mode_buttons("polygon")
 
     def _choose_images(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -915,6 +1018,12 @@ class MeasurerWindow(QMainWindow):
             with QSignalBlocker(button):
                 button.setChecked(mode == self.current_view_mode)
         self.box_plot_filter_panel.setVisible(self.current_view_mode == "Box Plot")
+
+    def _sync_roi_mode_buttons(self, mode: str) -> None:
+        with QSignalBlocker(self.rectangle_roi_mode_button):
+            self.rectangle_roi_mode_button.setChecked(mode == "rectangle")
+        with QSignalBlocker(self.polygon_roi_mode_button):
+            self.polygon_roi_mode_button.setChecked(mode == "polygon")
 
 
 def create_window() -> MeasurerWindow:

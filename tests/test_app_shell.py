@@ -212,6 +212,79 @@ def test_roi_drag_appends_multiple_rectangle_shapes(qapp, tmp_path):
     assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
 
 
+def test_polygon_mode_left_clicks_vertices_and_double_click_completes_shape(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "polygon_roi.tif"
+    tifffile.imwrite(image_path, np.ones((100, 200), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(800, 400)
+    qapp.processEvents()
+
+    window.polygon_roi_mode_button.click()
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(200, 100))
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(600, 100))
+    QTest.mouseDClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(400, 300))
+
+    assert window.queue.rows[0].roi.polygons == (
+        app_module.PolygonRoi(points=((50, 25), (150, 25), (100, 75))),
+    )
+    assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
+
+
+def test_incomplete_polygon_drawing_does_not_change_roi_state(qapp, tmp_path):
+    image_path = tmp_path / "incomplete_polygon_roi.tif"
+    tifffile.imwrite(image_path, np.ones((100, 200), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(800, 400)
+    qapp.processEvents()
+
+    window.polygon_roi_mode_button.click()
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(200, 100))
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(600, 100))
+
+    assert window.queue.rows[0].roi.is_empty
+    assert _queue_status_text(window, 0)[0] == "Full image · Pending"
+
+
+def test_polygon_roi_created_in_gui_participates_in_measurement(qapp, tmp_path):
+    image_path = tmp_path / "polygon_measure.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=200,
+            image_height=120,
+            center_x=88,
+            top_y=30,
+            height=50,
+            tcd=28,
+            bcd=42,
+        )
+    )
+    image[25:95, 150:180] = 255
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(800, 480)
+    qapp.processEvents()
+
+    window.polygon_roi_mode_button.click()
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(160, 40))
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(560, 40))
+    QTest.mouseClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(560, 440))
+    QTest.mouseDClick(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(160, 440))
+    window.measure_current_button.click()
+
+    row = window.queue.rows[0]
+    assert row.measure_status == "Measured"
+    assert row.measurement_results is not None
+    assert len(row.measurement_results.metal_islands) == 1
+
+
 def test_queue_status_cell_does_not_duplicate_status_text(qapp, tmp_path):
     image_path = tmp_path / "status_cell.tif"
     image = create_single_metal_island_image(
@@ -254,6 +327,25 @@ def test_roi_outline_does_not_fill_the_selected_region(qapp, tmp_path):
     assert abs(center_color.red() - 120) <= 1
     assert abs(center_color.green() - 120) <= 1
     assert abs(center_color.blue() - 120) <= 1
+    assert _image_contains_color(rendered, QColor("#40c4ff"))
+
+
+def test_polygon_roi_outline_does_not_fill_the_selected_region(qapp, tmp_path):
+    image_path = tmp_path / "polygon_roi_outline.tif"
+    tifffile.imwrite(image_path, np.ones((100, 200), dtype=np.uint8) * 120)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(200, 100)
+    window.add_selected_polygon_roi(((50, 25), (150, 25), (150, 75), (50, 75)))
+    qapp.processEvents()
+
+    rendered = _render_widget(window.image_label)
+    center_color = rendered.pixelColor(100, 50)
+    assert abs(center_color.red() - 120) <= 1
+    assert abs(center_color.green() - 120) <= 1
+    assert abs(center_color.blue() - 120) <= 1
+    assert _image_contains_color(rendered, QColor("#40c4ff"))
 
 
 def test_file_queue_fits_sidebar_without_horizontal_scroll(qapp, tmp_path):

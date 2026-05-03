@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF / `.dm3` Add Images / fit-to-window Original preview、guided queue 的 Group / batch default scale / per-image scale override / multi-rectangle ROI Union editing、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview、Denoiser-inspired 深色 UI，以及 Export MVS 的 single-source / multi-source output 與 overwrite confirmation。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF / `.dm3` Add Images / fit-to-window Original preview、guided queue 的 Group / batch default scale / per-image scale override / rectangle + polygon ROI Union editing、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview、Denoiser-inspired 深色 UI，以及 Export MVS 的 single-source / multi-source output 與 overwrite confirmation。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -36,16 +36,18 @@ assets/icons/measurer.ico
 - Group name 會 trim 前後空白，trim 後空字串會被拒絕；中間空白與大小寫差異會保留。
 - `nm / pixel` 使用 batch default scale 搭配 per-image override；metadata scale 優先且不可手動覆寫，沒有 metadata 時先使用 batch manual default，單張另行輸入不同值時使用該圖 override，完全沒有 manual 時才使用 px。
 - manual `nm / pixel` 只接受正數與小數；`0`、負數、非數字會顯示 inline error 並保留上一個 valid scale state。
-- selected image 支援多個 rectangle ROI Shapes；拖拉新 ROI 會加入 ROI Union，不會取代舊 ROI。
-- Original / Debug workspace 會顯示既有 ROI；拖選 ROI 時會即時顯示 cyan dashed outline 與 corner handles，不用實心色塊蓋住影像。
+- selected image 支援多個 rectangle / polygon ROI Shapes；拖拉 rectangle 或完成 polygon 會加入 ROI Union，不會取代舊 ROI。
+- ROI editing UI 支援 Rectangle / Polygon mode；Rectangle 用拖拉建立，Polygon 用 left-click 加 vertices、double-click 完成。
+- incomplete polygon drawing 不會加入 ROI Union，也不會影響 Measure Current。
+- Original / Debug workspace 會顯示既有 ROI；拖選 rectangle 或繪製 polygon 時會顯示 cyan outline，不用實心色塊蓋住影像。
 - Image workspace 會等比例 fit 影像，不讓大型原始影像的 pixmap size 撐壞視窗比例。
-- Undo ROI 會移除最近完成的 rectangle ROI Shape；Undo 到沒有 ROI Shapes 時回到 Full image。
+- Undo ROI 會移除最近完成的 ROI Shape，不論是 rectangle 或 polygon；Undo 到沒有 ROI Shapes 時回到 Full image。
 - Clear ROI 會回到 Full image。
 - ROI geometry 會 clamp 在 image bounds 內。
 - ROI 改變、Undo ROI 或 Clear ROI 會刪除 stale measurement results，Measure 回到 `Pending`，Export 回到 `Not exported`。
 - Measure Current 支援 clean synthetic STEM ZC Image 中多個 bright Metal Islands on dark LK 的 tracer bullet。
 - Measure Current 只量測目前選取圖片，不自動切下一張，也不直接寫 output files。
-- 沒有 ROI 時，Measure Current 使用 full image 作為 Analysis Region；有 Custom ROI 時，只分析 rectangle ROI Union 內像素。
+- 沒有 ROI 時，Measure Current 使用 full image 作為 Analysis Region；有 Custom ROI 時，只分析 rectangle / polygon ROI Union 內像素。
 - Measure Current 會在 Analysis Region 內用 Otsu rough mask 做 connected component detection。
 - candidate filtering 已支援 `HARD_MIN_COMPONENT_AREA_PX = 100`、median-area relative threshold default `MIN_AREA_RATIO_TO_MEDIAN = 0.03`，以及距離 effective Analysis Region boundary <= 1 px 的 boundary-touch exclusion；Full image 用 image boundary，rectangle ROI / ROI Union 用實際 selected mask edge。
 - `MIN_AREA_RATIO_TO_MEDIAN` 可透過 measurement config 覆寫；GUI 調整欄位尚未實作。
@@ -157,7 +159,7 @@ MVS 會包含：
 - `.dm3` 讀取先採用 `rosettasciio`。
 - RGB/RGBA 直接轉 grayscale，不顯示 warning。
 - multi-page TIFF / 3D stack 先拒絕。
-- 每張圖片可有多個 rectangle ROI Shapes；Analysis Region 使用這些 ROI Shapes 的聯集。
+- 每張圖片可有多個 rectangle / polygon ROI Shapes；Analysis Region 使用這些 ROI Shapes 的聯集。
 - 沒有 ROI 時直接分析全圖。
 - Otsu rough mask。
 - connected component metal candidate detection。
@@ -172,7 +174,6 @@ MVS 會包含：
 MVS 暫不包含：
 
 - `.dm4`。
-- polygon ROI。
 - 手動拉線 brightness profile。
 - Excel 內嵌 box plot / probability chart。
 - 複雜 QC score。
@@ -436,13 +437,15 @@ Manual `nm / pixel` 輸入驗證：
 
 MVS ROI 規則：
 
-- 每張圖可有多個 rectangle ROI Shapes。
+- 每張圖可有多個 rectangle / polygon ROI Shapes。
 - 沒有 ROI 時，Measure Current 直接分析全圖。
-- 有 ROI 時，只分析 rectangle ROI Union 內。
-- 拖拉新 rectangle ROI 會加入 ROI Union，不取代既有 ROI Shape。
-- 可 Undo ROI，移除最近完成的 rectangle ROI Shape。
+- 有 ROI 時，只分析 ROI Union 內。
+- Rectangle mode 用拖拉建立 rectangle ROI Shape；Polygon mode 用 left-click 加 vertices、double-click 完成 polygon ROI Shape。
+- incomplete polygon drawing 不會加入 ROI Union，也不會影響 Measure Current。
+- 拖拉新 rectangle ROI 或完成 polygon ROI 會加入 ROI Union，不取代既有 ROI Shape。
+- 可 Undo ROI，移除最近完成的 ROI Shape，不論是 rectangle 或 polygon。
 - 可 Clear ROI，清除全部 ROI Shapes。
-- ROI rectangle 必須 clamp 在影像範圍內，不能超出影像。
+- ROI geometry 必須 clamp 在影像範圍內，不能超出影像。
 - ROI 太小時，Measure Current 不執行。
 - ROI 太小不改成 Failed，因為這不是 algorithm failure。
 - ROI 太小時，Measure 狀態維持 Pending，左側 status card 顯示 `ROI is too small.`。
@@ -451,14 +454,13 @@ MVS ROI 規則：
 
 ROI 顯示規則：
 
-- Original / ROI editing state 會顯示所有 rectangle ROI Shapes；拖拉中會顯示 live ROI preview。ROI 只畫輪廓與 corner handles，不用填色遮住影像內容。
+- Original / ROI editing state 會顯示所有 rectangle / polygon ROI Shapes；拖拉 rectangle 中會顯示 live ROI preview，polygon 繪製中會顯示目前 polyline。ROI 只畫輪廓，不用填色遮住影像內容。
 - Result View 不顯示 ROI。
 - exported Result Image 不顯示 ROI。
 - Debug View 可以顯示 ROI。
 
 TODO：
 
-- polygon ROI。
 - 可點選 touching-boundary metal，決定是否保留。
 
 ## 影像處理流程
@@ -555,7 +557,7 @@ component 接觸或距離 effective analysis boundary <= 1 px
 有 ROI 時：
 
 - analysis boundary = 實際 selected ROI mask edge。
-- 多個 rectangle ROI Shapes 時，ROI Union 內每個 selected mask edge 都會視為 boundary。
+- 多個 rectangle / polygon ROI Shapes 時，ROI Union 內每個 selected mask edge 都會視為 boundary。
 
 沒有 ROI 時：
 
@@ -1196,7 +1198,7 @@ roi_width_px = image_width
 roi_height_px = image_height
 ```
 
-有矩形 ROI：
+有單一 rectangle ROI Shape：
 
 ```text
 roi_type = rectangle
@@ -1204,6 +1206,26 @@ roi_x_px = left
 roi_y_px = top
 roi_width_px = width
 roi_height_px = height
+```
+
+有單一 polygon ROI Shape：
+
+```text
+roi_type = polygon
+roi_x_px = ROI Union bounding box left
+roi_y_px = ROI Union bounding box top
+roi_width_px = ROI Union bounding box width
+roi_height_px = ROI Union bounding box height
+```
+
+有多個 ROI Shapes 或混合 rectangle / polygon：
+
+```text
+roi_type = roi_union
+roi_x_px = ROI Union bounding box left
+roi_y_px = ROI Union bounding box top
+roi_width_px = ROI Union bounding box width
+roi_height_px = ROI Union bounding box height
 ```
 
 ## File Export
@@ -1317,7 +1339,7 @@ Debug Image：
 - Add Images 以 absolute file path 去重；同一路徑重複加入直接忽略，不重設既有 row， 不同資料夾同檔名允許加入。
 - Group name 前後空白自動 trim，trim 後不可為空；中間空白、中文、英文、數字允許，大小寫視為不同 group。
 - Manual `nm / pixel` 只在圖片沒有 metadata scale 時可編輯；第一個有效 manual 值會成為 batch default，後續對單張輸入不同值會成為該圖 override；空白會清除該圖 override，若沒有 batch default 才回到 px；只接受正數，可輸入小數；`0`、負數、非數字不套用並顯示 inline error。
-- ROI rectangle 必須 clamp 在影像範圍內；ROI Union 太小時 Measure Current 不執行，且不把圖片狀態改成 Failed。
+- ROI geometry 必須 clamp 在影像範圍內；ROI Union 太小時 Measure Current 不執行，且不把圖片狀態改成 Failed。
 - Measure Current 若失敗，GUI 停在 Original，不自動切 Debug View；file table 顯示 Failed，左側 status card 顯示 failure reason。
 - Failed 圖片不寫入 Trace Sheet；failure reason 只保留在 GUI status card / Debug View。
 - 只有產生的 final measurements 會進輸出；沒有 pair candidate 或沒有 valid pair 時，不補 missing Space row，也不進任何輸出。
@@ -1328,7 +1350,6 @@ Debug Image：
 
 ## 後續 TODO
 
-- polygon ROI。
 - 可點選 touching-boundary metal 並手動保留。
 - 手動拉線 brightness profile。
 - 人工線段顯示 profile plot。

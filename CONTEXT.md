@@ -24,6 +24,14 @@ _Avoid_: output unit, result group
 A user-drawn region that limits the Analysis Region but is not itself a reporting unit.
 _Avoid_: sample, measurement group
 
+**ROI Shape**:
+One completed user-drawn rectangle or polygon that contributes pixels to the ROI Union.
+_Avoid_: result shape, report unit
+
+**ROI Union**:
+The pixel union of all completed ROI Shapes on one STEM ZC Image. Incomplete polygon drawing is not part of the ROI Union.
+_Avoid_: separate ROI results, shape list
+
 **Refined Boundary**:
 The final ordered closed boundary used for official measurements, derived from local image intensity transition rather than directly from the Otsu contour.
 _Avoid_: Otsu boundary, mask contour
@@ -87,7 +95,9 @@ _Avoid_: tag, class, folder
 ## Relationships
 
 - A **STEM ZC Image** contains zero or more **Metal Islands**.
-- An **Analysis Region** is either the full **STEM ZC Image** or the inside of one **ROI**.
+- An **Analysis Region** is either the full **STEM ZC Image** or the inside of the **ROI Union**.
+- A **ROI Shape** is one completed rectangle or polygon.
+- A **ROI Union** contains the pixels selected by one or more completed **ROI Shapes**.
 - A **ROI** limits analysis but does not create separate summaries by itself.
 - A **Metal Island** has one **Refined Boundary**.
 - A **Refined Boundary** may contain **Rough Boundary Fallback** points when local refinement is unreliable.

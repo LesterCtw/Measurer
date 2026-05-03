@@ -5,7 +5,7 @@ from math import ceil
 
 import numpy as np
 
-from measurer.image_queue import RectRoi, RoiSelection
+from measurer.image_queue import RectRoi, RoiSelection, roi_union_mask
 
 HARD_MIN_COMPONENT_AREA_PX = 100
 MIN_AREA_RATIO_TO_MEDIAN = 0.03
@@ -180,17 +180,14 @@ def _analysis_region_for(
         return RectRoi(x=0, y=0, width=image_width, height=image_height)
 
     if isinstance(roi, RoiSelection):
-        clamped_rectangles = [
-            clamped for rect in roi.rectangles if (clamped := _clamped_roi(rect, image))
-        ]
-        if not clamped_rectangles:
+        bounding_box = roi.bounding_box_for_image(image)
+        if bounding_box is None:
             return RectRoi(x=0, y=0, width=image_width, height=image_height)
 
-        left = min(rect.x for rect in clamped_rectangles)
-        top = min(rect.y for rect in clamped_rectangles)
-        right = max(rect.x + rect.width for rect in clamped_rectangles)
-        bottom = max(rect.y + rect.height for rect in clamped_rectangles)
-        return RectRoi(x=left, y=top, width=right - left, height=bottom - top)
+        clamped_roi = _clamped_roi(bounding_box, image)
+        if clamped_roi is None:
+            return RectRoi(x=0, y=0, width=image_width, height=image_height)
+        return clamped_roi
 
     clamped_roi = _clamped_roi(roi, image)
     if clamped_roi is None:
@@ -209,17 +206,7 @@ def _analysis_mask_for(
     ):
         return mask
 
-    mask[:, :] = False
-    for rect in roi.rectangles:
-        clamped = _clamped_roi(rect, image)
-        if clamped is None:
-            continue
-        left = clamped.x - analysis_region.x
-        top = clamped.y - analysis_region.y
-        right = left + clamped.width
-        bottom = top + clamped.height
-        mask[top:bottom, left:right] = True
-    return mask
+    return roi_union_mask(roi, image, analysis_region)
 
 
 def _clamped_roi(roi: RectRoi, image: np.ndarray) -> RectRoi | None:

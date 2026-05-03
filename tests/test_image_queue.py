@@ -1,7 +1,7 @@
 import numpy as np
 import tifffile
 
-from measurer.image_queue import ImageQueue, RectRoi, ScaleResolution
+from measurer.image_queue import ImageQueue, PolygonRoi, RectRoi, ScaleResolution
 
 
 def test_add_images_accepts_dm3_2d_image_with_px_fallback(monkeypatch, tmp_path):
@@ -456,3 +456,68 @@ def test_undo_roi_removes_latest_rectangle_shape_and_returns_to_full_image(
     assert row.measure_status == "Pending"
     assert row.export_status == "Not exported"
     assert row.measurement_results is None
+
+
+def test_polygon_roi_shape_can_be_added_undone_and_cleared(tmp_path):
+    image_path = tmp_path / "polygon_roi.tif"
+    image = np.ones((40, 60), dtype=np.uint8)
+    polygon = PolygonRoi(points=((5, 5), (35, 5), (20, 30)))
+
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.record_measurement_result(0, {"measurements": [1]})
+
+    assert queue.add_polygon_roi(0, polygon) is True
+
+    row = queue.rows[0]
+    assert row.roi.polygons == (polygon,)
+    assert row.roi_status == "Custom ROI"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+    queue.record_measurement_result(0, {"measurements": [1]})
+    assert queue.undo_roi(0) is True
+
+    row = queue.rows[0]
+    assert row.roi.is_empty
+    assert row.roi_status == "Full image"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+    queue.add_polygon_roi(0, polygon)
+    queue.record_measurement_result(0, {"measurements": [1]})
+    assert queue.clear_roi(0) is True
+
+    row = queue.rows[0]
+    assert row.roi.is_empty
+    assert row.roi_status == "Full image"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+
+def test_undo_roi_removes_latest_completed_shape_across_rectangle_and_polygon(
+    tmp_path,
+):
+    image_path = tmp_path / "mixed_roi.tif"
+    image = np.ones((40, 60), dtype=np.uint8)
+    rectangle = RectRoi(x=2, y=3, width=10, height=12)
+    polygon = PolygonRoi(points=((5, 5), (35, 5), (20, 30)))
+
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.set_roi(0, rectangle)
+    queue.add_polygon_roi(0, polygon)
+
+    assert queue.undo_roi(0) is True
+    row = queue.rows[0]
+    assert row.roi.rectangles == (rectangle,)
+    assert row.roi.polygons == ()
+    assert row.roi_status == "Custom ROI"
+
+    assert queue.undo_roi(0) is True
+    row = queue.rows[0]
+    assert row.roi.is_empty
+    assert row.roi_status == "Full image"

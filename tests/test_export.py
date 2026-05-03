@@ -2,7 +2,7 @@ import numpy as np
 from openpyxl import load_workbook
 
 from measurer.export import export_measured_batch
-from measurer.image_queue import ImageQueue, RectRoi
+from measurer.image_queue import ImageQueue, PolygonRoi, RectRoi, RoiSelection
 from measurer.measurement import measure_image
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
@@ -414,3 +414,34 @@ def test_export_trace_records_custom_roi_geometry(tmp_path):
     trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
     first_trace = trace_rows[1]
     assert first_trace[13:18] == ("rectangle", 32, 16, 64, 80)
+
+
+def test_export_trace_records_polygon_roi_union_geometry(tmp_path):
+    source_folder = tmp_path / "source"
+    source_folder.mkdir()
+    image_path = source_folder / "polygon_roi.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=32,
+            height=50,
+            tcd=32,
+            bcd=44,
+        )
+    )
+    roi = RoiSelection(
+        polygons=(PolygonRoi(points=((20, 16), (108, 16), (108, 104), (20, 104))),)
+    )
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.add_polygon_roi(0, roi.polygons[0])
+    queue.record_measurement_result(0, measure_image(image, roi=roi))
+
+    export_measured_batch(queue)
+
+    workbook = load_workbook(source_folder / "measured_image" / "measurements.xlsx")
+    trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
+    first_trace = trace_rows[1]
+    assert first_trace[13:18] == ("polygon", 20, 16, 89, 89)
