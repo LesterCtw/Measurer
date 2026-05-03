@@ -56,6 +56,203 @@ def test_export_writes_single_source_artifacts_for_measured_images(tmp_path):
     assert queue.rows[0].export_status == "Exported"
 
 
+def test_export_requires_output_folder_for_multi_source_measured_images(tmp_path):
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(first_folder / "first.tif", image)
+    queue.add_image_data(second_folder / "second.tif", image)
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+    queue.record_measurement_result(1, measure_image(image, roi=None))
+
+    result = export_measured_batch(queue)
+
+    assert result.needs_output_folder is True
+    assert result.exported_count == 0
+    assert result.message == "Choose an output folder for multi-source export."
+    assert not (first_folder / "measured_image").exists()
+    assert not (second_folder / "debug_image").exists()
+    assert queue.rows[0].export_status == "Not exported"
+    assert queue.rows[1].export_status == "Not exported"
+
+
+def test_export_writes_multi_source_artifacts_under_chosen_output_folder(tmp_path):
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    output_folder = tmp_path / "export"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(first_folder / "first.tif", image)
+    queue.add_image_data(second_folder / "second.tif", image)
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+    queue.record_measurement_result(1, measure_image(image, roi=None))
+
+    result = export_measured_batch(queue, output_folder=output_folder)
+
+    measured_folder = output_folder / "measured_image"
+    debug_folder = output_folder / "debug_image"
+    assert result.exported_count == 2
+    assert result.output_folder == output_folder
+    assert result.message == "Exported 2 measured images."
+    assert (measured_folder / "first_result.png").is_file()
+    assert (measured_folder / "second_result.png").is_file()
+    assert (debug_folder / "first_debug.png").is_file()
+    assert (debug_folder / "second_debug.png").is_file()
+    assert (measured_folder / "measurements.xlsx").is_file()
+    assert not (first_folder / "measured_image").exists()
+    assert not (second_folder / "debug_image").exists()
+    assert queue.rows[0].export_status == "Exported"
+    assert queue.rows[1].export_status == "Exported"
+
+
+def test_export_multi_source_same_filename_uses_mvs_overwrite_rule(tmp_path):
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    output_folder = tmp_path / "export"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(first_folder / "same_name.tif", image)
+    queue.add_image_data(second_folder / "same_name.tif", image)
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+    queue.record_measurement_result(1, measure_image(image, roi=None))
+
+    result = export_measured_batch(queue, output_folder=output_folder)
+
+    measured_files = sorted(
+        path.name for path in (output_folder / "measured_image").iterdir()
+    )
+    debug_files = sorted(path.name for path in (output_folder / "debug_image").iterdir())
+    assert result.exported_count == 2
+    assert measured_files == ["measurements.xlsx", "same_name_result.png"]
+    assert debug_files == ["same_name_debug.png"]
+    assert queue.rows[0].export_status == "Exported"
+    assert queue.rows[1].export_status == "Exported"
+
+
+def test_export_requires_overwrite_confirmation_before_replacing_existing_targets(
+    tmp_path,
+):
+    source_folder = tmp_path / "source"
+    source_folder.mkdir()
+    image_path = source_folder / "stem_zc.tif"
+    measured_folder = source_folder / "measured_image"
+    debug_folder = source_folder / "debug_image"
+    measured_folder.mkdir()
+    debug_folder.mkdir()
+    existing_result = measured_folder / "stem_zc_result.png"
+    existing_debug = debug_folder / "stem_zc_debug.png"
+    existing_workbook = measured_folder / "measurements.xlsx"
+    existing_result.write_text("old result")
+    existing_debug.write_text("old debug")
+    existing_workbook.write_text("old workbook")
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+
+    result = export_measured_batch(queue)
+
+    assert result.overwrite_required is True
+    assert result.exported_count == 0
+    assert result.message == "Confirm overwrite to export."
+    assert result.overwrite_summary is not None
+    assert result.overwrite_summary.output_folder == source_folder
+    assert result.overwrite_summary.result_image_count == 1
+    assert result.overwrite_summary.debug_image_count == 1
+    assert result.overwrite_summary.workbook_count == 1
+    assert existing_result.read_text() == "old result"
+    assert existing_debug.read_text() == "old debug"
+    assert existing_workbook.read_text() == "old workbook"
+    assert queue.rows[0].export_status == "Not exported"
+
+
+def test_export_overwrites_existing_targets_when_confirmed(tmp_path):
+    source_folder = tmp_path / "source"
+    source_folder.mkdir()
+    image_path = source_folder / "stem_zc.tif"
+    measured_folder = source_folder / "measured_image"
+    debug_folder = source_folder / "debug_image"
+    measured_folder.mkdir()
+    debug_folder.mkdir()
+    existing_result = measured_folder / "stem_zc_result.png"
+    existing_debug = debug_folder / "stem_zc_debug.png"
+    existing_workbook = measured_folder / "measurements.xlsx"
+    existing_result.write_bytes(b"old result")
+    existing_debug.write_bytes(b"old debug")
+    existing_workbook.write_bytes(b"old workbook")
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+
+    result = export_measured_batch(queue, overwrite_existing=True)
+
+    assert result.overwrite_required is False
+    assert result.exported_count == 1
+    assert result.message == "Exported 1 measured image."
+    assert existing_result.read_bytes() != b"old result"
+    assert existing_debug.read_bytes() != b"old debug"
+    assert existing_workbook.read_bytes() != b"old workbook"
+    assert queue.rows[0].export_status == "Exported"
+
+
 def test_export_includes_only_measured_images_in_files_and_workbook(tmp_path):
     source_folder = tmp_path / "source"
     source_folder.mkdir()

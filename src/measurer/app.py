@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QTableWidgetItem,
     QTableWidget,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from measurer.export import export_measured_batch
+from measurer.export import OverwriteSummary, export_measured_batch
 from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi
 from measurer.measurement import Measurement, MeasurementResult, measure_image
 
@@ -268,8 +269,41 @@ class MeasurerWindow(QMainWindow):
 
     def _export_measured_images(self) -> None:
         result = export_measured_batch(self.queue)
+        if result.needs_output_folder:
+            folder = QFileDialog.getExistingDirectory(
+                self,
+                "Choose Export Folder",
+                "",
+            )
+            if folder:
+                result = export_measured_batch(self.queue, output_folder=Path(folder))
+        if result.overwrite_required and result.overwrite_summary is not None:
+            if self._confirm_export_overwrite(result.overwrite_summary):
+                result = export_measured_batch(
+                    self.queue,
+                    output_folder=result.output_folder,
+                    overwrite_existing=True,
+                )
+            else:
+                self._refresh_file_table()
+                self.status_label.setText("Export canceled.")
+                return
         self._refresh_file_table()
         self.status_label.setText(result.message)
+
+    def _confirm_export_overwrite(self, summary: OverwriteSummary) -> bool:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Confirm Export Overwrite")
+        dialog.setText(_format_overwrite_dialog_text(summary))
+        cancel_button = dialog.addButton(
+            "Cancel", QMessageBox.ButtonRole.RejectRole
+        )
+        overwrite_button = dialog.addButton(
+            "Overwrite", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.setDefaultButton(cancel_button)
+        dialog.exec()
+        return dialog.clickedButton() == overwrite_button
 
     def _show_original_view(self) -> None:
         row_index = self.file_table.currentRow()
@@ -567,6 +601,32 @@ def _format_result_values(
         for name, measurement in result.measurements.items()
         if measurement.status == "success"
     )
+
+
+def _format_overwrite_dialog_text(summary: OverwriteSummary) -> str:
+    lines = [
+        "Existing export files will be overwritten.",
+        f"Output folder: {summary.output_folder}",
+        "",
+        "Targets:",
+    ]
+    if summary.result_image_count:
+        lines.append(
+            f"- {summary.result_image_count} "
+            f"{_pluralize(summary.result_image_count, 'Result Image')}"
+        )
+    if summary.debug_image_count:
+        lines.append(
+            f"- {summary.debug_image_count} "
+            f"{_pluralize(summary.debug_image_count, 'Debug Image')}"
+        )
+    if summary.workbook_count:
+        lines.append(f"- {summary.workbook_count} measurements.xlsx")
+    return "\n".join(lines)
+
+
+def _pluralize(count: int, singular: str) -> str:
+    return singular if count == 1 else f"{singular}s"
 
 
 def _box_plot_points(queue: ImageQueue) -> tuple[list[BoxPlotPoint], str]:

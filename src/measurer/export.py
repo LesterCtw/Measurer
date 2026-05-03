@@ -14,6 +14,8 @@ from measurer.measurement import Measurement, MeasurementResult
 
 
 NO_MEASURED_IMAGES_MESSAGE = "No measured images to export."
+MULTI_SOURCE_OUTPUT_FOLDER_MESSAGE = "Choose an output folder for multi-source export."
+OVERWRITE_CONFIRMATION_MESSAGE = "Confirm overwrite to export."
 _QAPPLICATION: QApplication | None = None
 
 MEASUREMENT_TYPE_ORDER = [
@@ -34,6 +36,22 @@ MEASUREMENT_COLORS = {
 
 
 @dataclass(frozen=True)
+class OverwriteSummary:
+    output_folder: Path
+    result_image_count: int = 0
+    debug_image_count: int = 0
+    workbook_count: int = 0
+
+    @property
+    def has_existing_targets(self) -> bool:
+        return (
+            self.result_image_count > 0
+            or self.debug_image_count > 0
+            or self.workbook_count > 0
+        )
+
+
+@dataclass(frozen=True)
 class ExportResult:
     exported_count: int
     skipped_pending_count: int = 0
@@ -41,9 +59,16 @@ class ExportResult:
     output_folder: Path | None = None
     blocked_reason: str = ""
     message: str = ""
+    needs_output_folder: bool = False
+    overwrite_required: bool = False
+    overwrite_summary: OverwriteSummary | None = None
 
 
-def export_measured_batch(queue: ImageQueue) -> ExportResult:
+def export_measured_batch(
+    queue: ImageQueue,
+    output_folder: Path | None = None,
+    overwrite_existing: bool = False,
+) -> ExportResult:
     measured_rows = [
         (row_index, row)
         for row_index, row in enumerate(queue.rows)
@@ -58,27 +83,60 @@ def export_measured_batch(queue: ImageQueue) -> ExportResult:
         )
 
     source_folders = {row.path.parent for _, row in measured_rows}
-    if len(source_folders) != 1:
-        raise NotImplementedError("Multi-source export is not part of this issue.")
+    if output_folder is None and len(source_folders) != 1:
+        return ExportResult(
+            exported_count=0,
+            blocked_reason=MULTI_SOURCE_OUTPUT_FOLDER_MESSAGE,
+            message=MULTI_SOURCE_OUTPUT_FOLDER_MESSAGE,
+            needs_output_folder=True,
+        )
 
-    output_folder = next(iter(source_folders))
+    if output_folder is None:
+        output_folder = next(iter(source_folders))
+
     measured_folder = output_folder / "measured_image"
     debug_folder = output_folder / "debug_image"
-    measured_folder.mkdir(exist_ok=True)
-    debug_folder.mkdir(exist_ok=True)
+    planned_rows = [
+        (
+            row_index,
+            row,
+            measured_folder / f"{row.path.stem}_result.png",
+            debug_folder / f"{row.path.stem}_debug.png",
+        )
+        for row_index, row in measured_rows
+    ]
+    workbook_path = measured_folder / "measurements.xlsx"
+    overwrite_summary = _existing_target_summary(
+        output_folder=output_folder,
+        result_paths=[result_path for _, _, result_path, _ in planned_rows],
+        debug_paths=[debug_path for _, _, _, debug_path in planned_rows],
+        workbook_path=workbook_path,
+    )
+    if overwrite_summary.has_existing_targets and not overwrite_existing:
+        return ExportResult(
+            exported_count=0,
+            output_folder=output_folder,
+            blocked_reason=OVERWRITE_CONFIRMATION_MESSAGE,
+            message=OVERWRITE_CONFIRMATION_MESSAGE,
+            overwrite_required=True,
+            overwrite_summary=overwrite_summary,
+        )
 
-    for row_index, row in measured_rows:
+    measured_folder.mkdir(parents=True, exist_ok=True)
+    debug_folder.mkdir(parents=True, exist_ok=True)
+
+    for row_index, row, result_path, debug_path in planned_rows:
         scale = queue.resolve_scale(row_index)
         result = row.measurement_results
         _save_result_image(
             row.image,
             result,
             scale.nm_per_px,
-            measured_folder / f"{row.path.stem}_result.png",
+            result_path,
         )
-        _save_debug_image(row.image, result, debug_folder / f"{row.path.stem}_debug.png")
+        _save_debug_image(row.image, result, debug_path)
 
-    _write_workbook(queue, measured_folder / "measurements.xlsx")
+    _write_workbook(queue, workbook_path)
     queue.record_export_success([row_index for row_index, _ in measured_rows])
 
     skipped_pending_count = sum(
@@ -94,6 +152,20 @@ def export_measured_batch(queue: ImageQueue) -> ExportResult:
         message=_format_export_message(
             exported_count, skipped_pending_count, skipped_failed_count
         ),
+    )
+
+
+def _existing_target_summary(
+    output_folder: Path,
+    result_paths: list[Path],
+    debug_paths: list[Path],
+    workbook_path: Path,
+) -> OverwriteSummary:
+    return OverwriteSummary(
+        output_folder=output_folder,
+        result_image_count=sum(1 for path in set(result_paths) if path.exists()),
+        debug_image_count=sum(1 for path in set(debug_paths) if path.exists()),
+        workbook_count=1 if workbook_path.exists() else 0,
     )
 
 

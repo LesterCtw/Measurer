@@ -2,7 +2,9 @@ import numpy as np
 import tifffile
 from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QFileDialog
 
+import measurer.app as app_module
 from measurer.app import create_window
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
@@ -438,6 +440,253 @@ def test_app_export_writes_measured_images_and_updates_status(qapp, tmp_path):
     assert (tmp_path / "measured_image" / "gui_export_result.png").is_file()
     assert (tmp_path / "debug_image" / "gui_export_debug.png").is_file()
     assert (tmp_path / "measured_image" / "measurements.xlsx").is_file()
+
+
+def test_app_multi_source_export_canceling_output_folder_writes_nothing(
+    qapp, tmp_path, monkeypatch
+):
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    first_path = first_folder / "first.tif"
+    second_path = second_folder / "second.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(first_path, image)
+    tifffile.imwrite(second_path, image)
+    folder_picker_calls = []
+
+    def cancel_output_folder_picker(*args):
+        folder_picker_calls.append(args)
+        return ""
+
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", cancel_output_folder_picker
+    )
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.file_table.setCurrentCell(0, 1)
+    window.measure_current_button.click()
+    window.file_table.setCurrentCell(1, 1)
+    window.measure_current_button.click()
+    window.export_button.click()
+
+    assert len(folder_picker_calls) == 1
+    assert window.status_label.text() == "Choose an output folder for multi-source export."
+    assert window.file_table.item(0, 5).text() == "Not exported"
+    assert window.file_table.item(1, 5).text() == "Not exported"
+    assert not (tmp_path / "measured_image").exists()
+    assert not (tmp_path / "debug_image").exists()
+
+
+def test_app_multi_source_export_uses_chosen_output_folder(
+    qapp, tmp_path, monkeypatch
+):
+    first_folder = tmp_path / "first"
+    second_folder = tmp_path / "second"
+    output_folder = tmp_path / "export"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    first_path = first_folder / "first.tif"
+    second_path = second_folder / "second.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(first_path, image)
+    tifffile.imwrite(second_path, image)
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", lambda *args: str(output_folder)
+    )
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.file_table.setCurrentCell(0, 1)
+    window.measure_current_button.click()
+    window.file_table.setCurrentCell(1, 1)
+    window.measure_current_button.click()
+    window.export_button.click()
+
+    assert window.file_table.item(0, 5).text() == "Exported"
+    assert window.file_table.item(1, 5).text() == "Exported"
+    assert window.status_label.text() == "Exported 2 measured images."
+    assert (output_folder / "measured_image" / "first_result.png").is_file()
+    assert (output_folder / "measured_image" / "second_result.png").is_file()
+    assert (output_folder / "debug_image" / "first_debug.png").is_file()
+    assert (output_folder / "debug_image" / "second_debug.png").is_file()
+    assert (output_folder / "measured_image" / "measurements.xlsx").is_file()
+
+
+def test_app_overwrite_dialog_cancel_aborts_export(qapp, tmp_path, monkeypatch):
+    image_path = tmp_path / "existing.tif"
+    measured_folder = tmp_path / "measured_image"
+    debug_folder = tmp_path / "debug_image"
+    measured_folder.mkdir()
+    debug_folder.mkdir()
+    existing_result = measured_folder / "existing_result.png"
+    existing_debug = debug_folder / "existing_debug.png"
+    existing_workbook = measured_folder / "measurements.xlsx"
+    existing_result.write_text("old result")
+    existing_debug.write_text("old debug")
+    existing_workbook.write_text("old workbook")
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+
+    class FakeMessageBox:
+        instances = []
+
+        class ButtonRole:
+            RejectRole = "reject"
+            AcceptRole = "accept"
+
+        def __init__(self, parent=None):
+            self.parent = parent
+            self.window_title = ""
+            self.text = ""
+            self.buttons = []
+            self.default_button = None
+            self._clicked_button = None
+            FakeMessageBox.instances.append(self)
+
+        def setWindowTitle(self, title):
+            self.window_title = title
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, text, role):
+            self.buttons.append((text, role))
+            return text
+
+        def setDefaultButton(self, button):
+            self.default_button = button
+
+        def exec(self):
+            self._clicked_button = "Cancel"
+            return 0
+
+        def clickedButton(self):
+            return self._clicked_button
+
+    monkeypatch.setattr(app_module, "QMessageBox", FakeMessageBox)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.export_button.click()
+
+    dialog = FakeMessageBox.instances[0]
+    assert dialog.window_title == "Confirm Export Overwrite"
+    assert str(tmp_path) in dialog.text
+    assert "1 Result Image" in dialog.text
+    assert "1 Debug Image" in dialog.text
+    assert "measurements.xlsx" in dialog.text
+    assert dialog.buttons == [
+        ("Cancel", FakeMessageBox.ButtonRole.RejectRole),
+        ("Overwrite", FakeMessageBox.ButtonRole.AcceptRole),
+    ]
+    assert dialog.default_button == "Cancel"
+    assert window.status_label.text() == "Export canceled."
+    assert window.file_table.item(0, 5).text() == "Not exported"
+    assert existing_result.read_text() == "old result"
+    assert existing_debug.read_text() == "old debug"
+    assert existing_workbook.read_text() == "old workbook"
+
+
+def test_app_overwrite_dialog_overwrite_replaces_existing_targets(
+    qapp, tmp_path, monkeypatch
+):
+    image_path = tmp_path / "existing.tif"
+    measured_folder = tmp_path / "measured_image"
+    debug_folder = tmp_path / "debug_image"
+    measured_folder.mkdir()
+    debug_folder.mkdir()
+    existing_result = measured_folder / "existing_result.png"
+    existing_debug = debug_folder / "existing_debug.png"
+    existing_workbook = measured_folder / "measurements.xlsx"
+    existing_result.write_bytes(b"old result")
+    existing_debug.write_bytes(b"old debug")
+    existing_workbook.write_bytes(b"old workbook")
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+
+    class FakeMessageBox:
+        class ButtonRole:
+            RejectRole = "reject"
+            AcceptRole = "accept"
+
+        def __init__(self, parent=None):
+            self._clicked_button = None
+
+        def setWindowTitle(self, title):
+            pass
+
+        def setText(self, text):
+            pass
+
+        def addButton(self, text, role):
+            return text
+
+        def setDefaultButton(self, button):
+            pass
+
+        def exec(self):
+            self._clicked_button = "Overwrite"
+            return 0
+
+        def clickedButton(self):
+            return self._clicked_button
+
+    monkeypatch.setattr(app_module, "QMessageBox", FakeMessageBox)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.export_button.click()
+
+    assert window.status_label.text() == "Exported 1 measured image."
+    assert window.file_table.item(0, 5).text() == "Exported"
+    assert existing_result.read_bytes() != b"old result"
+    assert existing_debug.read_bytes() != b"old debug"
+    assert existing_workbook.read_bytes() != b"old workbook"
 
 
 def test_app_debug_view_shows_candidate_filtering_diagnostics(qapp, tmp_path):
