@@ -198,7 +198,7 @@ class MeasurerWindow(QMainWindow):
             self,
             "Add Images",
             "",
-            "TIFF Images (*.tif *.tiff)",
+            "STEM ZC Images (*.tif *.tiff *.dm3)",
         )
         if paths:
             self.add_image_paths(paths)

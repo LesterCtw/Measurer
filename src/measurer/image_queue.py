@@ -14,6 +14,12 @@ class ScaleResolution:
 
 
 @dataclass(frozen=True)
+class LoadedImage:
+    image: np.ndarray
+    metadata_nm_per_px: float | None = None
+
+
+@dataclass(frozen=True)
 class RectRoi:
     x: int
     y: int
@@ -77,16 +83,20 @@ class ImageQueue:
                 continue
 
             try:
-                image = _read_tiff_image(path)
+                loaded_image = _read_image(path)
             except Exception:
                 _count_skip(skipped_reasons, "failed to read image data")
                 continue
 
-            if not _is_supported_2d_image(image):
+            if not _is_supported_2d_image(loaded_image.image):
                 _count_skip(skipped_reasons, "unsupported image shape")
                 continue
 
-            self.add_image_data(path, image)
+            self.add_image_data(
+                path,
+                loaded_image.image,
+                metadata_nm_per_px=loaded_image.metadata_nm_per_px,
+            )
             added_count += 1
 
         return AddImagesSummary(
@@ -233,6 +243,12 @@ class ImageQueue:
         return True
 
 
+def _read_image(path: Path) -> LoadedImage:
+    if path.suffix.lower() == ".dm3":
+        return _read_dm3_image(path)
+    return LoadedImage(image=_read_tiff_image(path))
+
+
 def _read_tiff_image(path: Path) -> np.ndarray:
     with tifffile.TiffFile(path) as tiff:
         if len(tiff.pages) != 1:
@@ -247,6 +263,46 @@ def _read_tiff_image(path: Path) -> np.ndarray:
     ):
         return _to_grayscale(image)
     return image
+
+
+def _read_dm3_image(path: Path) -> LoadedImage:
+    from rsciio import digitalmicrograph
+
+    signals = digitalmicrograph.file_reader(str(path))
+    if len(signals) == 0:
+        return LoadedImage(image=np.asarray([]))
+
+    signal = signals[0]
+    image = np.asarray(signal["data"])
+    return LoadedImage(
+        image=image,
+        metadata_nm_per_px=_metadata_nm_per_px_from_axes(signal.get("axes", [])),
+    )
+
+
+def _metadata_nm_per_px_from_axes(axes: object) -> float | None:
+    if not isinstance(axes, list):
+        return None
+
+    nm_scales: list[float] = []
+    for axis in axes:
+        if not isinstance(axis, dict):
+            continue
+        units = str(axis.get("units", "")).strip().lower()
+        if units not in {"nm", "nanometer", "nanometers"}:
+            continue
+        try:
+            scale = float(axis["scale"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if scale > 0:
+            nm_scales.append(scale)
+
+    if len(nm_scales) < 2:
+        return None
+    if not np.allclose(nm_scales, nm_scales[0]):
+        return None
+    return nm_scales[0]
 
 
 def _is_supported_2d_image(image: np.ndarray) -> bool:

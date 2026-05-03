@@ -37,6 +37,53 @@ def test_app_adds_tiff_to_queue_and_original_preview(qapp, tmp_path):
     assert not window.image_label.pixmap().isNull()
 
 
+def test_app_add_images_dialog_allows_dm3_selection(qapp, monkeypatch):
+    captured_filters = []
+
+    def fake_get_open_file_names(parent, title, directory, file_filter):
+        captured_filters.append(file_filter)
+        return [], ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", fake_get_open_file_names)
+    window = create_window()
+
+    window.add_images_button.click()
+
+    assert captured_filters == ["STEM ZC Images (*.tif *.tiff *.dm3)"]
+
+
+def test_app_measures_dm3_without_metadata_in_px(qapp, monkeypatch, tmp_path):
+    image_path = tmp_path / "pixel_fallback.dm3"
+    image_path.write_bytes(b"fake dm3")
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+
+    def fake_file_reader(filename):
+        return [{"data": image, "axes": []}]
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+    window = create_window()
+
+    summary = window.add_image_paths([image_path])
+    window.measure_current_button.click()
+
+    assert summary.added_count == 1
+    assert window.file_table.item(0, 4).text() == "Measured"
+    assert "TCD 32.0 px" in window.result_values_label.text()
+
+
 def test_app_shows_selected_image_in_original_preview(qapp, tmp_path):
     first_path = tmp_path / "first.tif"
     second_path = tmp_path / "second.tif"

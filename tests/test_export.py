@@ -343,6 +343,51 @@ def test_export_summary_separates_units_and_uses_current_scale(tmp_path):
     ]
 
 
+def test_export_trace_records_px_scale_source_for_dm3_without_metadata(
+    monkeypatch, tmp_path
+):
+    source_folder = tmp_path / "source"
+    source_folder.mkdir()
+    image_path = source_folder / "pixel_fallback.dm3"
+    image_path.write_bytes(b"fake dm3")
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+
+    def fake_file_reader(filename):
+        return [{"data": image, "axes": []}]
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+    queue = ImageQueue()
+    queue.add_images([image_path])
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+
+    export_measured_batch(queue)
+
+    workbook = load_workbook(source_folder / "measured_image" / "measurements.xlsx")
+    summary_rows = list(workbook["Summary"].iter_rows(values_only=True))
+    measurement_rows = list(workbook["Measurements"].iter_rows(values_only=True))
+    trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
+
+    assert summary_rows[0][8] == "unit"
+    assert summary_rows[1][8] == "px"
+    assert measurement_rows[0][6] == "unit"
+    assert measurement_rows[1][6] == "px"
+    assert trace_rows[0][11:13] == ("scale_nm_per_px", "scale_source")
+    assert trace_rows[1][11:13] == (None, "px")
+
+
 def test_export_trace_records_custom_roi_geometry(tmp_path):
     source_folder = tmp_path / "source"
     source_folder.mkdir()

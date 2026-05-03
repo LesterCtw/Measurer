@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview，以及 Export MVS 的 single-source / multi-source output 與 overwrite confirmation。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF / `.dm3` Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview，以及 Export MVS 的 single-source / multi-source output 與 overwrite confirmation。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -12,10 +12,10 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - PySide6 desktop app shell。
 - `measurer` command 可啟動 GUI。
 - 左側 File Queue / control panel 與右側 Original preview workspace。
-- Add Images 支援 single 2D TIFF。
+- Add Images 支援 single 2D TIFF 與 `rosettasciio` 可讀取的 single 2D `.dm3`。
 - 8-bit / 16-bit grayscale TIFF 可加入 queue。
 - RGB/RGBA TIFF 直接轉 grayscale，不顯示 warning。
-- multi-page TIFF / 3D stack / unreadable TIFF 在 Add Images 時 skip，不加入 queue。
+- multi-page TIFF / unsupported `.dm3` shape / 3D stack / unreadable image data 在 Add Images 時 skip，不加入 queue。
 - Add Images batch summary 顯示 added / skipped 與原因數量。
 - duplicate absolute file path 直接忽略，不重設既有 row。
 - file queue 支援選取一列或多列後用 Set Group 套用 group name。
@@ -72,7 +72,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
   - Measure = `Pending`
   - Export = `Not exported`
 
-目前尚未實作完整 export-grade Debug Image diagnostics、`.dm3` input、metadata scale parser、Excel 內嵌 box plot，以及真實 STEM ZC 樣本 validation。
+目前尚未實作完整 export-grade Debug Image diagnostics、Excel 內嵌 box plot，以及真實 STEM ZC / 公司 `.dm3` metadata scale validation。
 
 ## 開發指令
 
@@ -258,7 +258,7 @@ Measure Current：
 Add Images：
 
 - Add Images 時檢查 image shape。
-- multi-page TIFF / 3D stack 載入時直接拒絕，不加入 file queue。
+- multi-page TIFF / unsupported `.dm3` shape / 3D stack 載入時直接拒絕，不加入 file queue。
 - `.dm3` / TIFF image data 讀取失敗時直接拒絕，不加入 file queue。
 - 顯示簡短訊息：`Unsupported image shape: only single 2D images are supported.`
 - 讀取失敗時顯示簡短訊息：`Failed to read image data.`

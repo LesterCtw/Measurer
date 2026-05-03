@@ -4,6 +4,131 @@ import tifffile
 from measurer.image_queue import ImageQueue, RectRoi, ScaleResolution
 
 
+def test_add_images_accepts_dm3_2d_image_with_px_fallback(monkeypatch, tmp_path):
+    image_path = tmp_path / "stem_zc.dm3"
+    image_path.write_bytes(b"fake dm3")
+    dm3_image = np.arange(16, dtype=np.uint8).reshape(4, 4)
+
+    def fake_file_reader(filename):
+        assert filename == str(image_path.resolve())
+        return [{"data": dm3_image, "axes": []}]
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+
+    queue = ImageQueue()
+    summary = queue.add_images([image_path])
+
+    assert summary.added_count == 1
+    assert summary.skipped_count == 0
+    assert queue.rows[0].file_name == "stem_zc.dm3"
+    assert np.array_equal(queue.rows[0].image, dm3_image)
+    assert queue.resolve_scale(0) == ScaleResolution(source="px", nm_per_px=None)
+
+
+def test_add_images_skips_unreadable_dm3_without_blocking_valid_files(
+    monkeypatch, tmp_path
+):
+    dm3_path = tmp_path / "bad.dm3"
+    dm3_path.write_bytes(b"bad dm3")
+    tiff_path = tmp_path / "valid.tif"
+    tifffile.imwrite(tiff_path, np.ones((4, 4), dtype=np.uint8))
+
+    def fake_file_reader(filename):
+        raise OSError(f"cannot read {filename}")
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+
+    queue = ImageQueue()
+    summary = queue.add_images([dm3_path, tiff_path])
+
+    assert summary.added_count == 1
+    assert summary.skipped_reasons == {"failed to read image data": 1}
+    assert [row.file_name for row in queue.rows] == ["valid.tif"]
+
+
+def test_add_images_skips_dm3_unsupported_shape(monkeypatch, tmp_path):
+    image_path = tmp_path / "stack.dm3"
+    image_path.write_bytes(b"fake stack dm3")
+
+    def fake_file_reader(filename):
+        return [{"data": np.ones((2, 4, 5), dtype=np.uint8), "axes": []}]
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+
+    queue = ImageQueue()
+    summary = queue.add_images([image_path])
+
+    assert summary.added_count == 0
+    assert summary.skipped_reasons == {"unsupported image shape": 1}
+    assert queue.rows == []
+
+
+def test_dm3_metadata_scale_takes_priority_and_blocks_manual_override(
+    monkeypatch, tmp_path
+):
+    image_path = tmp_path / "metadata_scale.dm3"
+    image_path.write_bytes(b"fake dm3")
+
+    def fake_file_reader(filename):
+        return [
+            {
+                "data": np.ones((4, 4), dtype=np.uint8),
+                "axes": [
+                    {"name": "y", "scale": 0.8, "units": "nm"},
+                    {"name": "x", "scale": 0.8, "units": "nm"},
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+
+    queue = ImageQueue()
+    summary = queue.add_images([image_path])
+
+    assert summary.added_count == 1
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="metadata", nm_per_px=0.8
+    )
+    assert queue.set_manual_scale(0, "0.5") is False
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="metadata", nm_per_px=0.8
+    )
+
+
+def test_dm3_without_metadata_allows_manual_scale_after_px_fallback(
+    monkeypatch, tmp_path
+):
+    image_path = tmp_path / "no_metadata_scale.dm3"
+    image_path.write_bytes(b"fake dm3")
+
+    def fake_file_reader(filename):
+        return [{"data": np.ones((4, 4), dtype=np.uint8), "axes": []}]
+
+    monkeypatch.setattr(
+        "rsciio.digitalmicrograph.file_reader",
+        fake_file_reader,
+    )
+
+    queue = ImageQueue()
+    queue.add_images([image_path])
+
+    assert queue.resolve_scale(0) == ScaleResolution(source="px", nm_per_px=None)
+    assert queue.set_manual_scale(0, "0.5") is True
+    assert queue.resolve_scale(0) == ScaleResolution(source="manual", nm_per_px=0.5)
+
+
 def test_add_images_accepts_valid_2d_tiff(tmp_path):
     image_path = tmp_path / "stem_zc.tif"
     tifffile.imwrite(image_path, np.arange(16, dtype=np.uint8).reshape(4, 4))

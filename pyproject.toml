@@ -8,6 +8,7 @@ dependencies = [
     "numpy>=2.0",
     "openpyxl>=3.1.5",
     "pyside6>=6.8",
+    "rosettasciio>=0.13.0",
     "tifffile>=2025.5.10",
 ]
 
