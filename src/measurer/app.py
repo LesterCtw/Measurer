@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from measurer.app_icon import load_application_icon
 from measurer.export import OverwriteSummary, export_measured_batch
 from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi
 from measurer.measurement import (
@@ -425,6 +426,9 @@ class MeasurerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Measurer")
+        icon = load_application_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.resize(1280, 800)
         self.setMinimumSize(980, 620)
         self.queue = ImageQueue()
@@ -1561,6 +1565,9 @@ def _stylesheet() -> str:
 
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
+    icon = load_application_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     window = create_window()
     window.showMaximized()
     return app.exec()

@@ -6,6 +6,18 @@ Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 S
 
 Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對 Metal Island、ROI、Refined Boundary、TCD、BCD、Height、Horizontal Space、Vertical Space 等詞彙的定義。
 
+## 品牌與打包 Icon
+
+本程式的正式品牌名稱是 `Measurer`。
+
+打包成 Windows app 時必須使用專案內的 Measurer icon：
+
+```text
+assets/icons/measurer.ico
+```
+
+`assets/icons/measurer.png` 是同一個 icon 的 PNG 版本，方便 README、installer 或其他包裝流程預覽使用。這個 icon 使用 Aligner / Denoiser / Measurer 共用的深色圓角 icon style。未來如果加入 PyInstaller / installer script，必須把 icon 參數指向 `assets/icons/measurer.ico`，確保打包後的 exe / shortcut 顯示 Measurer 品牌 icon。
+
 ## 目前已實作
 
 - `pip` / `venv` Python project scaffold，可在 Windows 11 + Python 3.12.8 環境安裝。
