@@ -248,6 +248,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
             "roi_y_px",
             "roi_width_px",
             "roi_height_px",
+            "roi_shape_count",
             "refined_point_count",
             "fallback_point_count",
             "fallback_ratio",
@@ -301,6 +302,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
                     scale_source=scale_resolution.source,
                     scale_nm_per_px=scale_resolution.nm_per_px,
                     roi_type=_roi_type(row.roi),
+                    roi_shape_count=_roi_shape_count(row.roi),
                 )
             )
 
@@ -338,6 +340,7 @@ def _trace_row(
     scale_source: str,
     scale_nm_per_px: float | None,
     roi_type: str,
+    roi_shape_count: int,
 ) -> list[object]:
     roi = result.analysis_region
     refined_count, fallback_count, fallback_ratio = _refinement_summary(
@@ -362,6 +365,7 @@ def _trace_row(
         roi.y,
         roi.width,
         roi.height,
+        roi_shape_count,
         refined_count,
         fallback_count,
         fallback_ratio,
@@ -371,11 +375,11 @@ def _trace_row(
 def _roi_type(roi: RoiSelection) -> str:
     if roi.is_empty:
         return "full_image"
-    if len(roi.rectangles) == 1 and not roi.polygons:
-        return "rectangle"
-    if len(roi.polygons) == 1 and not roi.rectangles:
-        return "polygon"
-    return "roi_union"
+    return "union"
+
+
+def _roi_shape_count(roi: RoiSelection) -> int:
+    return len(roi.rectangles) + len(roi.polygons)
 
 
 def _refinement_summary(

@@ -2,7 +2,7 @@ import numpy as np
 from openpyxl import load_workbook
 
 from measurer.export import export_measured_batch
-from measurer.image_queue import ImageQueue, PolygonRoi, RectRoi, RoiSelection
+from measurer.image_queue import ImageQueue, PolygonRoi, RectRoi
 from measurer.measurement import measure_image
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
@@ -387,7 +387,37 @@ def test_export_trace_records_px_scale_source_for_dm3_without_metadata(
     assert trace_rows[1][11:13] == (None, "px")
 
 
-def test_export_trace_records_custom_roi_geometry(tmp_path):
+def test_export_trace_records_full_image_roi_shape_count(tmp_path):
+    source_folder = tmp_path / "source"
+    source_folder.mkdir()
+    image_path = source_folder / "full_image.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.record_measurement_result(0, measure_image(image, roi=None))
+
+    export_measured_batch(queue)
+
+    workbook = load_workbook(source_folder / "measured_image" / "measurements.xlsx")
+    trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
+    header = trace_rows[0]
+    first_trace = trace_rows[1]
+    roi_shape_count_index = header.index("roi_shape_count")
+    assert first_trace[13] == "full_image"
+    assert first_trace[roi_shape_count_index] == 0
+
+
+def test_export_trace_records_single_shape_union_metadata(tmp_path):
     source_folder = tmp_path / "source"
     source_folder.mkdir()
     image_path = source_folder / "roi.tif"
@@ -412,14 +442,50 @@ def test_export_trace_records_custom_roi_geometry(tmp_path):
 
     workbook = load_workbook(source_folder / "measured_image" / "measurements.xlsx")
     trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
+    header = trace_rows[0]
     first_trace = trace_rows[1]
-    assert first_trace[13:18] == ("rectangle", 32, 16, 64, 80)
+    roi_shape_count_index = header.index("roi_shape_count")
+    assert first_trace[13:18] == ("union", 32, 16, 64, 80)
+    assert first_trace[roi_shape_count_index] == 1
 
 
-def test_export_trace_records_polygon_roi_union_geometry(tmp_path):
+def test_export_trace_records_multi_shape_union_metadata(tmp_path):
     source_folder = tmp_path / "source"
     source_folder.mkdir()
-    image_path = source_folder / "polygon_roi.tif"
+    image_path = source_folder / "multi_roi.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.set_roi(0, RectRoi(x=32, y=16, width=64, height=80))
+    queue.set_roi(0, RectRoi(x=96, y=96, width=24, height=24))
+    roi = queue.rows[0].roi
+    queue.record_measurement_result(0, measure_image(image, roi=roi))
+
+    export_measured_batch(queue)
+
+    workbook = load_workbook(source_folder / "measured_image" / "measurements.xlsx")
+    trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
+    header = trace_rows[0]
+    first_trace = trace_rows[1]
+    roi_shape_count_index = header.index("roi_shape_count")
+    assert first_trace[13:18] == ("union", 32, 16, 88, 104)
+    assert first_trace[roi_shape_count_index] == 2
+
+
+def test_export_trace_records_mixed_shape_union_metadata(tmp_path):
+    source_folder = tmp_path / "source"
+    source_folder.mkdir()
+    image_path = source_folder / "mixed_roi.tif"
     image = create_single_metal_island_image(
         SingleMetalIslandSpec(
             image_width=128,
@@ -431,17 +497,22 @@ def test_export_trace_records_polygon_roi_union_geometry(tmp_path):
             bcd=44,
         )
     )
-    roi = RoiSelection(
-        polygons=(PolygonRoi(points=((20, 16), (108, 16), (108, 104), (20, 104))),)
-    )
     queue = ImageQueue()
     queue.add_image_data(image_path, image)
-    queue.add_polygon_roi(0, roi.polygons[0])
+    queue.set_roi(0, RectRoi(x=32, y=24, width=64, height=72))
+    queue.add_polygon_roi(
+        0,
+        PolygonRoi(points=((20, 16), (108, 16), (108, 104), (20, 104))),
+    )
+    roi = queue.rows[0].roi
     queue.record_measurement_result(0, measure_image(image, roi=roi))
 
     export_measured_batch(queue)
 
     workbook = load_workbook(source_folder / "measured_image" / "measurements.xlsx")
     trace_rows = list(workbook["Trace"].iter_rows(values_only=True))
+    header = trace_rows[0]
     first_trace = trace_rows[1]
-    assert first_trace[13:18] == ("polygon", 20, 16, 89, 89)
+    roi_shape_count_index = header.index("roi_shape_count")
+    assert first_trace[13:18] == ("union", 20, 16, 89, 89)
+    assert first_trace[roi_shape_count_index] == 2

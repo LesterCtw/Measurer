@@ -88,6 +88,7 @@ assets/icons/measurer.ico
 - `measurements.xlsx` 會輸出到 `measured_image/`，包含 Summary、Measurements、Trace sheets。
 - Excel Summary 依 Group、measurement type、unit 彙整 successful measurements，不混合 nm 與 px。
 - Excel Measurements / Trace 只包含 Measured 圖片內產生的 final measurements，並使用 export 當下的 scale state。
+- Excel Trace Sheet 記錄 ROI metadata：Full image 使用 `roi_type = full_image` 與 `roi_shape_count = 0`；一個或多個 ROI Shapes 使用 `roi_type = union`、ROI Union bounding box、以及 completed ROI Shape 數量。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
@@ -1175,6 +1176,7 @@ roi_x_px
 roi_y_px
 roi_width_px
 roi_height_px
+roi_shape_count
 refined_point_count
 fallback_point_count
 fallback_ratio
@@ -1197,37 +1199,21 @@ roi_x_px = 0
 roi_y_px = 0
 roi_width_px = image_width
 roi_height_px = image_height
+roi_shape_count = 0
 ```
 
-有單一 rectangle ROI Shape：
+有一個或多個 completed ROI Shapes：
 
 ```text
-roi_type = rectangle
-roi_x_px = left
-roi_y_px = top
-roi_width_px = width
-roi_height_px = height
-```
-
-有單一 polygon ROI Shape：
-
-```text
-roi_type = polygon
+roi_type = union
 roi_x_px = ROI Union bounding box left
 roi_y_px = ROI Union bounding box top
 roi_width_px = ROI Union bounding box width
 roi_height_px = ROI Union bounding box height
+roi_shape_count = completed ROI Shape count
 ```
 
-有多個 ROI Shapes 或混合 rectangle / polygon：
-
-```text
-roi_type = roi_union
-roi_x_px = ROI Union bounding box left
-roi_y_px = ROI Union bounding box top
-roi_width_px = ROI Union bounding box width
-roi_height_px = ROI Union bounding box height
-```
+Trace Sheet 不儲存完整 rectangle / polygon coordinates，避免把 Excel 變成 geometry serialization format。ROI 只限制 Analysis Region，不是 reporting unit；Summary / Measurements 仍依 image、Group、measurement type、target ID、unit 組織，不依 ROI Shape 拆分。
 
 ## File Export
 
