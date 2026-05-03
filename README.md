@@ -16,7 +16,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 assets/icons/measurer.ico
 ```
 
-`assets/icons/measurer.png` 是同一個 icon 的 PNG 版本，方便 README、installer 或其他包裝流程預覽使用。這個 icon 使用 Aligner / Denoiser / Measurer 共用的深色圓角 icon style。未來如果加入 PyInstaller / installer script，必須把 icon 參數指向 `assets/icons/measurer.ico`，確保打包後的 exe / shortcut 顯示 Measurer 品牌 icon。
+`assets/icons/measurer.png` 是同一個 icon 的 PNG 版本，方便 README、installer 或其他包裝流程預覽使用。這個 icon 使用 Aligner / Denoiser / Measurer 共用的深色圓角 icon style。Windows 打包流程必須把 icon 參數指向 `assets/icons/measurer.ico`，確保打包後的 exe / shortcut 顯示 Measurer 品牌 icon。
 
 ## 目前已實作
 
@@ -97,11 +97,21 @@ assets/icons/measurer.ico
 
 目前尚未實作完整 export-grade Debug Image diagnostics、Excel 內嵌 box plot，以及真實 STEM ZC / 公司 `.dm3` metadata scale validation。
 
-## 開發指令
+## Windows 11 pip-only 安裝、測試與打包流程
 
-以下指令以 Windows 11 PowerShell + Python 3.12.8 為準，不需要安裝 `uv`。
+以下流程以 Windows 11 PowerShell + Python 3.12.8 為準。這個專案在 Windows 上只使用 `pip install` 安裝套件，不使用 `uv`、Poetry、Conda 或其他 dependency manager。
 
-建立 virtual environment：
+### 1. 環境檢查
+
+確認 Windows 可以找到 Python 3.12：
+
+```powershell
+py -3.12 --version
+```
+
+預期看到 `Python 3.12.x`。本專案第一版 runtime/build target 是 Python 3.12.8；如果看到其他 major/minor 版本，請先安裝 Python 3.12。
+
+### 2. 建立 virtual environment
 
 ```powershell
 py -3.12 -m venv .venv
@@ -120,23 +130,21 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
-安裝 / 更新套件：
+### 3. 安裝開發環境
+
+所有安裝都透過 `python -m pip install` 執行：
 
 ```powershell
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev]"
 ```
 
-啟動 GUI：
+這會以 editable mode 安裝 Measurer，並安裝測試需要的 `pytest`。使用 editable mode 的原因是開發時修改 `src/` 內程式後，不需要重裝 package；取捨是這不是最乾淨的 end-user 安裝方式，只適合開發與測試。
+
+### 4. 啟動 GUI
 
 ```powershell
 measurer
-```
-
-執行測試：
-
-```powershell
-python -m pytest
 ```
 
 如果 `measurer` command 沒有被 PowerShell 找到，可改用：
@@ -144,6 +152,82 @@ python -m pytest
 ```powershell
 python -m measurer.app
 ```
+
+### 5. 執行自動測試
+
+```powershell
+python -m pytest
+```
+
+測試通過代表目前 synthetic image regression、GUI shell、image queue、measurement、export、documentation 行為符合專案目前規格。這不能取代真實 STEM ZC / 公司 `.dm3` validation；真實資料仍需要人工驗收。
+
+### 6. 手動安裝 smoke test
+
+在 Windows 11 開發機完成安裝後，至少跑一次這個 smoke test：
+
+1. 執行 `measurer`，確認 GUI 可以開啟且視窗標題是 `Measurer`。
+2. 執行 `python scripts\generate_ab_group_test_images.py`，產生測試 TIFF 到 Desktop 的 `ab_group_tif_test_images`。
+3. 在 GUI 按 Add Images，加入剛產生的 TIFF。
+4. 選一張圖，確認 Original preview 正常顯示。
+5. 畫一個 rectangle ROI，再切到 Polygon mode 畫一個 polygon ROI。
+6. 按 Measure Current，確認狀態變成 `Measured` 且切到 Result View。
+7. 切到 Debug View，確認有 diagnostics。
+8. 按 Export，確認原圖資料夾下產生 `measured_image/`、`debug_image/` 與 `measurements.xlsx`。
+9. 打開 `measurements.xlsx`，確認有 Summary、Measurements、Trace sheets。
+
+### 7. Windows 打包成 exe
+
+目前沒有 committed packaging script；Windows 打包先使用 PyInstaller 手動流程。這樣做的原因是 MVS 先保留最少工具鏈，等 Windows 實機驗證後再把穩定指令固化成 script；取捨是第一次打包需要人工照步驟執行。
+
+請在乾淨的 Windows 11 PowerShell 中執行：
+
+```powershell
+py -3.12 -m venv .venv-build
+.\.venv-build\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+python -m pip install pyinstaller
+Remove-Item -Recurse -Force build, dist, Measurer.spec -ErrorAction SilentlyContinue
+python -m PyInstaller `
+  --noconfirm `
+  --clean `
+  --windowed `
+  --name Measurer `
+  --icon assets\icons\measurer.ico `
+  --paths src `
+  --collect-all PySide6 `
+  --collect-all rsciio `
+  --hidden-import rsciio.digitalmicrograph `
+  src\measurer\app.py
+```
+
+打包完成後，預期輸出：
+
+```text
+dist\Measurer\Measurer.exe
+```
+
+`--windowed` 會讓 app 以 GUI 方式啟動，不顯示 console 視窗。`--collect-all rsciio` 與 `--hidden-import rsciio.digitalmicrograph` 是為了讓 `.dm3` reader 在 frozen app 中仍可被 PyInstaller 收進去；取捨是 build 可能比較大，之後如果 Windows release 驗證穩定，可以再縮小 collect 範圍。
+
+### 8. 打包後安裝測試流程
+
+在同一台 Windows build machine 上先測一次：
+
+```powershell
+.\dist\Measurer\Measurer.exe
+```
+
+接著把整個 `dist\Measurer\` 資料夾複製到另一台乾淨 Windows 11 電腦，或至少複製到沒有啟用 `.venv-build` 的位置，再跑一次：
+
+1. 雙擊 `Measurer.exe`，確認 GUI 可以開啟。
+2. 確認 exe / shortcut icon 是 Measurer icon。
+3. 用 Add Images 加入 8-bit 或 16-bit grayscale TIFF。
+4. 測 Full image Measure Current，確認可進 Result View。
+5. 測 rectangle / polygon ROI Union 後 Measure Current。
+6. 測 Export，確認輸出 Result Images、Debug Images、`measurements.xlsx`。
+7. 如果有公司 `.dm3` 樣本，加入 `.dm3` 並確認 image data 可讀；metadata scale 目前仍是 best effort。
+
+打包驗收通過的最低標準：GUI 可開、TIFF 可加入、Measure Current 可成功、Export 可產生 `measured_image/`、`debug_image/`、`measurements.xlsx`。`.dm3` metadata scale 尚未用公司實際樣本驗證，所以不能把 `.dm3` scale correctness 視為 v1.1 打包完成條件。
 
 ## 目前 MVS 目標
 
