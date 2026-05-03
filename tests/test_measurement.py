@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from measurer.image_queue import RectRoi
@@ -337,43 +338,39 @@ def test_measure_horizontal_space_between_same_row_adjacent_metal_islands():
     assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(44)
 
 
-def test_horizontal_space_line_uses_inner_bcd_endpoints():
-    image = create_single_metal_island_image(
-        SingleMetalIslandSpec(
-            image_width=220,
-            image_height=128,
-            center_x=60,
-            top_y=24,
-            height=60,
-            tcd=32,
-            bcd=48,
-        )
-    )
-    right_image = create_single_metal_island_image(
-        SingleMetalIslandSpec(
-            image_width=220,
-            image_height=128,
-            center_x=150,
-            top_y=24,
-            height=60,
-            tcd=30,
-            bcd=42,
-        )
-    )
-    image = image.copy()
-    image[right_image == 220] = 220
+def test_horizontal_space_line_uses_facing_refined_bbox_sides():
+    image = np.full((140, 260), 20, dtype=np.uint8)
+    image[20:92, 40:91] = 220
+    image[92:101, 40:81] = 220
+    image[20:92, 130:191] = 220
+    image[92:101, 140:191] = 220
 
     result = measure_image(image, roi=None)
 
-    left_bcd_line = result.metal_islands[0].measurements["BCD"].line
-    right_bcd_line = result.metal_islands[1].measurements["BCD"].line
-    expected_y = round((left_bcd_line.end.y + right_bcd_line.start.y) / 2)
+    left_metal = result.metal_islands[0]
+    right_metal = result.metal_islands[1]
+    left_bbox_max_x = max(point.x for point in left_metal.refined_boundary.points)
+    right_bbox_min_x = min(point.x for point in right_metal.refined_boundary.points)
+    left_side_ys = [
+        point.y
+        for point in left_metal.refined_boundary.points
+        if point.x == left_bbox_max_x
+    ]
+    right_side_ys = [
+        point.y
+        for point in right_metal.refined_boundary.points
+        if point.x == right_bbox_min_x
+    ]
     line = result.measurements["M001-M002 Horizontal Space"].line
 
-    assert line.start == Point(x=left_bcd_line.end.x, y=expected_y)
-    assert line.end == Point(x=right_bcd_line.start.x, y=expected_y)
-    assert line.start.y == expected_y
-    assert line.end.y == expected_y
+    assert line.start.x == left_bbox_max_x
+    assert line.end.x == right_bbox_min_x
+    assert line.start.y == line.end.y
+    assert min(left_side_ys) <= line.start.y <= max(left_side_ys)
+    assert min(right_side_ys) <= line.end.y <= max(right_side_ys)
+    assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(
+        line.end.x - line.start.x
+    )
 
 
 def test_measure_vertical_space_between_same_column_adjacent_metal_islands():

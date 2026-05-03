@@ -467,13 +467,12 @@ def _measure_horizontal_spaces(
                 left,
                 right,
             )
-            y = round((left_endpoint.y + right_endpoint.y) / 2)
             measurements[name] = Measurement(
                 name=name,
-                value_px=float(right_bbox[0] - left_bbox[2]),
+                value_px=float(right_endpoint.x - left_endpoint.x),
                 line=MeasurementLine(
-                    start=Point(x=left_endpoint.x, y=y),
-                    end=Point(x=right_endpoint.x, y=y),
+                    start=left_endpoint,
+                    end=right_endpoint,
                 ),
             )
     return measurements, rejected_pairs
@@ -682,9 +681,36 @@ def _boundary_center(boundary: RefinedBoundary) -> tuple[float, float]:
 def _horizontal_space_display_endpoints(
     left: MetalIsland, right: MetalIsland
 ) -> tuple[Point, Point]:
-    left_bcd = left.measurements["BCD"].line
-    right_bcd = right.measurements["BCD"].line
-    return left_bcd.end, right_bcd.start
+    left_bbox = _boundary_bbox(left.refined_boundary)
+    right_bbox = _boundary_bbox(right.refined_boundary)
+    left_y_range = _boundary_side_y_range(left.refined_boundary, left_bbox[2])
+    right_y_range = _boundary_side_y_range(right.refined_boundary, right_bbox[0])
+    y = _shared_horizontal_space_y(left_y_range, right_y_range)
+    return Point(x=left_bbox[2], y=y), Point(x=right_bbox[0], y=y)
+
+
+def _boundary_side_y_range(
+    boundary: RefinedBoundary, side_x: int
+) -> tuple[int, int]:
+    intersections = _vertical_boundary_intersections(boundary, side_x)
+    if intersections:
+        return round(min(intersections)), round(max(intersections))
+
+    _min_x, min_y, _max_x, max_y = _boundary_bbox(boundary)
+    return min_y, max_y
+
+
+def _shared_horizontal_space_y(
+    left_y_range: tuple[int, int], right_y_range: tuple[int, int]
+) -> int:
+    overlap_min_y = max(left_y_range[0], right_y_range[0])
+    overlap_max_y = min(left_y_range[1], right_y_range[1])
+    if overlap_min_y <= overlap_max_y:
+        return round((overlap_min_y + overlap_max_y) / 2)
+
+    left_mid_y = (left_y_range[0] + left_y_range[1]) / 2
+    right_mid_y = (right_y_range[0] + right_y_range[1]) / 2
+    return round((left_mid_y + right_mid_y) / 2)
 
 
 def _refined_boundary_from_spans(

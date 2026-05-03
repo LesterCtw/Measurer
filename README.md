@@ -8,7 +8,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 
 ## 目前已實作
 
-- `uv` Python project scaffold。
+- `pip` / `venv` Python project scaffold，可在 Windows 11 + Python 3.12.8 環境安裝。
 - PySide6 desktop app shell。
 - `measurer` command 可啟動 GUI。
 - 左側 File Queue / control panel 與右側 fit-to-window image workspace。
@@ -40,7 +40,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - 每顆通過 filtering 的 Metal Island 會產生 ordered closed Refined Boundary，並計算 TCD、BCD、Height。
 - 多顆 Metal Islands 會依 top-to-bottom、row 內 left-to-right 指派 `M001`、`M002`、`M003` 這類 stable Metal ID。
 - Row / column grouping 使用 refined bbox center 與 median-size tolerance。
-- 同 row adjacent pair 通過 y-overlap criteria 時，會用 refined bbox horizontal gap 產生 Horizontal Space，Measurement Line 畫在 pair 互相面對的 bbox touch points 中間。
+- 同 row adjacent pair 通過 y-overlap criteria 時，會用 refined bbox horizontal gap 產生 Horizontal Space，Measurement Line 畫在 pair 的 refined boundary 與互相面對 bbox side 的交點之間。
 - 同 column adjacent pair 通過 x-overlap criteria 時，會用 shared x-range 上的 minimum vertical LK gap 產生 Vertical Space；Measurement Line 端點會落在 LK gap 內，不壓到上下 metal pixel。
 - missing pair candidates 或 invalid overlap pairs 不會產生 missing Space rows，也不會讓 image 變成 `Failed`。
 - valid pair 通過 overlap criteria 但 pair calculation 失敗時，會保留 failed final measurement 與 reason；Result View 不顯示 failed measurement line。
@@ -83,22 +83,50 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 
 ## 開發指令
 
-安裝 / 同步環境：
+以下指令以 Windows 11 PowerShell + Python 3.12.8 為準，不需要安裝 `uv`。
 
-```bash
-uv sync
+建立 virtual environment：
+
+```powershell
+py -3.12 -m venv .venv
 ```
 
-執行 GUI：
+啟用 virtual environment：
 
-```bash
-uv run measurer
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+如果 PowerShell 擋下啟用 script，先在同一個 PowerShell 視窗執行一次：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+安裝 / 更新套件：
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+啟動 GUI：
+
+```powershell
+measurer
 ```
 
 執行測試：
 
-```bash
-uv run pytest
+```powershell
+python -m pytest
+```
+
+如果 `measurer` command 沒有被 PowerShell 找到，可改用：
+
+```powershell
+python -m measurer.app
 ```
 
 ## 目前 MVS 目標
@@ -786,12 +814,12 @@ Horizontal Space = right_refined_bbox.x_min - left_refined_bbox.x_max
 顯示線：
 
 ```text
-left endpoint  = left Metal Island BCD Measurement Line 的內側端點
-right endpoint = right Metal Island BCD Measurement Line 的內側端點
-y              = two BCD endpoints 的中間 y
+left endpoint.x  = left_refined_bbox.x_max
+right endpoint.x = right_refined_bbox.x_min
+y                = pair 的 facing bbox side refined-boundary 交點共同 y-overlap 中點
 ```
 
-這讓 Result View 的 Horizontal Space 線段落在兩條 BCD Measurement Lines 的中間，避免貼在 bbox 極端點或 Metal Island 中心高度造成誤解。顯示線用來幫助判讀；reported value 仍使用 refined bbox horizontal gap。
+這讓 Result View 的 Horizontal Space 線段與 reported value 使用同一個 refined bbox gap 定義；線段不再借用 BCD endpoints。若兩側 facing bbox side 的 boundary 交點沒有共同 y-overlap，顯示線會退回使用兩側交點範圍中心的平均 y，但 reported value 仍使用 refined bbox horizontal gap。
 
 注意：
 
