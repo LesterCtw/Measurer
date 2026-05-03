@@ -348,6 +348,39 @@ def test_polygon_roi_outline_does_not_fill_the_selected_region(qapp, tmp_path):
     assert _image_contains_color(rendered, QColor("#40c4ff"))
 
 
+def test_result_view_hides_roi_while_debug_view_shows_roi_outline(qapp, tmp_path):
+    image_path = tmp_path / "roi_visibility_by_view.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=160,
+            image_height=128,
+            center_x=80,
+            top_y=32,
+            height=50,
+            tcd=32,
+            bcd=44,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(320, 256)
+    window.set_selected_roi(20, 16, 120, 96)
+    window.measure_current_button.click()
+    qapp.processEvents()
+
+    result_view = _render_widget(window.image_label)
+    result_roi_corner = result_view.pixelColor(40, 32)
+    assert result_roi_corner != QColor("#40c4ff")
+
+    window.debug_view_button.click()
+    qapp.processEvents()
+
+    debug_view = _render_widget(window.image_label)
+    assert debug_view.pixelColor(40, 32) == QColor("#40c4ff")
+
+
 def test_file_queue_fits_sidebar_without_horizontal_scroll(qapp, tmp_path):
     first_path = tmp_path / "first_measurement_source.tif"
     second_path = tmp_path / "second_measurement_source.tif"
