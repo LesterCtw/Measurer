@@ -816,10 +816,10 @@ Horizontal Space = right_refined_bbox.x_min - left_refined_bbox.x_max
 ```text
 left endpoint.x  = left_refined_bbox.x_max
 right endpoint.x = right_refined_bbox.x_min
-y                = pair 的 facing bbox side refined-boundary 交點共同 y-overlap 中點
+y                = pair 的兩條 TCD blue Measurement Lines 中間 y
 ```
 
-這讓 Result View 的 Horizontal Space 線段與 reported value 使用同一個 refined bbox gap 定義；線段不再借用 BCD endpoints。若兩側 facing bbox side 的 boundary 交點沒有共同 y-overlap，顯示線會退回使用兩側交點範圍中心的平均 y，但 reported value 仍使用 refined bbox horizontal gap。
+這讓 Result View 的 Horizontal Space 線段維持在 pair 的兩條 TCD blue Measurement Lines 之間，避免 tapered Metal Island 的 bbox 最寬處把粉紅線拉到中段或下段。reported value 仍使用 refined bbox horizontal gap；顯示線只借用 TCD 的 y 位置，不借用 TCD 的 x 端點。
 
 注意：
 

@@ -338,12 +338,12 @@ def test_measure_horizontal_space_between_same_row_adjacent_metal_islands():
     assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(44)
 
 
-def test_horizontal_space_line_uses_facing_refined_bbox_sides():
+def test_horizontal_space_line_uses_refined_bbox_gap_between_tcd_lines():
     image = np.full((140, 260), 20, dtype=np.uint8)
-    image[20:92, 40:91] = 220
-    image[92:101, 40:81] = 220
-    image[20:92, 130:191] = 220
-    image[92:101, 140:191] = 220
+    image[20:42, 45:81] = 220
+    image[42:101, 40:91] = 220
+    image[20:42, 150:186] = 220
+    image[42:101, 130:191] = 220
 
     result = measure_image(image, roi=None)
 
@@ -351,26 +351,37 @@ def test_horizontal_space_line_uses_facing_refined_bbox_sides():
     right_metal = result.metal_islands[1]
     left_bbox_max_x = max(point.x for point in left_metal.refined_boundary.points)
     right_bbox_min_x = min(point.x for point in right_metal.refined_boundary.points)
-    left_side_ys = [
-        point.y
-        for point in left_metal.refined_boundary.points
-        if point.x == left_bbox_max_x
-    ]
-    right_side_ys = [
-        point.y
-        for point in right_metal.refined_boundary.points
-        if point.x == right_bbox_min_x
-    ]
+    left_tcd_y = left_metal.measurements["TCD"].line.end.y
+    right_tcd_y = right_metal.measurements["TCD"].line.start.y
+    expected_y = round((left_tcd_y + right_tcd_y) / 2)
     line = result.measurements["M001-M002 Horizontal Space"].line
 
     assert line.start.x == left_bbox_max_x
     assert line.end.x == right_bbox_min_x
-    assert line.start.y == line.end.y
-    assert min(left_side_ys) <= line.start.y <= max(left_side_ys)
-    assert min(right_side_ys) <= line.end.y <= max(right_side_ys)
+    assert line.start.y == expected_y
+    assert line.end.y == expected_y
     assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(
         line.end.x - line.start.x
     )
+
+
+def test_horizontal_space_line_sits_midway_between_offset_tcd_lines():
+    image = np.full((560, 360), 20, dtype=np.uint8)
+    image[200:240, 70:111] = 220
+    image[240:400, 60:121] = 220
+    image[300:340, 230:271] = 220
+    image[340:500, 220:281] = 220
+
+    result = measure_image(image, roi=None)
+
+    left_tcd_y = result.metal_islands[0].measurements["TCD"].line.end.y
+    right_tcd_y = result.metal_islands[1].measurements["TCD"].line.start.y
+    line = result.measurements["M001-M002 Horizontal Space"].line
+
+    assert left_tcd_y == 200
+    assert right_tcd_y == 300
+    assert line.start.y == 250
+    assert line.end.y == 250
 
 
 def test_measure_vertical_space_between_same_column_adjacent_metal_islands():
