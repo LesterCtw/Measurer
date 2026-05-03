@@ -155,6 +155,33 @@ def test_app_sets_and_clears_roi_for_selected_image(qapp, tmp_path):
     assert window.queue.rows[0].roi is None
 
 
+def test_app_measure_current_keeps_too_small_roi_pending(qapp, tmp_path):
+    image_path = tmp_path / "tiny_roi.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.set_selected_roi(10, 10, 5, 5)
+    window.measure_current_button.click()
+
+    assert window.file_table.item(0, 3).text() == "Custom ROI"
+    assert window.file_table.item(0, 4).text() == "Pending"
+    assert window.file_table.item(0, 5).text() == "Not exported"
+    assert window.status_label.text() == "ROI is too small."
+    assert window.queue.rows[0].measurement_results is None
+
+
 def test_app_measure_current_updates_only_selected_image_and_shows_result_view(
     qapp, tmp_path
 ):

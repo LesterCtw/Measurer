@@ -25,7 +25,12 @@ from PySide6.QtWidgets import (
 
 from measurer.export import OverwriteSummary, export_measured_batch
 from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi
-from measurer.measurement import Measurement, MeasurementResult, measure_image
+from measurer.measurement import (
+    HARD_MIN_COMPONENT_AREA_PX,
+    Measurement,
+    MeasurementResult,
+    measure_image,
+)
 
 
 MEASUREMENT_TYPE_ORDER = [
@@ -250,6 +255,10 @@ class MeasurerWindow(QMainWindow):
             return
 
         row = self.queue.rows[row_index]
+        if _roi_is_too_small(row.roi):
+            self.status_label.setText("ROI is too small.")
+            return
+
         result = measure_image(row.image, row.roi)
         if result.status != "success":
             self.queue.record_measurement_failure(row_index, result)
@@ -387,6 +396,12 @@ class MeasurerWindow(QMainWindow):
 
 def create_window() -> MeasurerWindow:
     return MeasurerWindow()
+
+
+def _roi_is_too_small(roi: RectRoi | None) -> bool:
+    if roi is None:
+        return False
+    return roi.width * roi.height < HARD_MIN_COMPONENT_AREA_PX
 
 
 def _array_to_pixmap(image: np.ndarray) -> QPixmap:
