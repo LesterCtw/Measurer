@@ -439,6 +439,8 @@ Manual `nm / pixel` 輸入驗證：
 
 MVS ROI 規則：
 
+歷史脈絡：multi-shape ROI Union 是 layered on top of the stable rectangle ROI workflow。這代表目前文件保留先前穩定的 rectangle ROI baseline，同時記錄後續新增的 polygon ROI Shape 與多 ROI Shape union 能力；不是把歷史改寫成 multi-shape ROI 一開始就存在。
+
 - 每張圖可有多個 rectangle / polygon ROI Shapes。
 - 沒有 ROI 時，Measure Current 直接分析全圖。
 - 有 ROI 時，只分析 ROI Union 內。
@@ -453,6 +455,13 @@ MVS ROI 規則：
 - ROI 太小時，Measure 狀態維持 Pending，左側 status card 顯示 `ROI is too small.`。
 - 已量測圖片若 ROI 改變、Undo ROI 或 Clear ROI，直接刪除舊 measurement result。
 - 刪除舊 result 後，Measure 狀態回到 Pending，Export 狀態回到 Not exported。
+
+MVS ROI 編輯限制：
+
+- no moving/resizing existing ROI Shapes：已完成的 ROI Shape 不能移動或調整大小。
+- no arbitrary shape deletion：不能任意刪除指定的單一 ROI Shape，只能用 Undo ROI 移除最近完成的 ROI Shape，或用 Clear ROI 清除全部 ROI Shapes。
+- no vertex editing：polygon ROI Shape 完成後不能編輯 vertex。
+- no subtractive ROI：ROI Union 只支援加入 ROI Shape，不支援扣除區域。
 
 ROI 顯示規則：
 
