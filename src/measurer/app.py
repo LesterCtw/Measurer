@@ -326,19 +326,37 @@ class ImageCanvas(QWidget):
             )
             return
 
-        left = 56
-        top = 72
-        right = self.width() - 28
-        bottom = self.height() - 78
-        if right <= left or bottom <= top:
-            return
-
         values = [point.value for point in points]
         min_value = min(values)
         max_value = max(values)
         if min_value == max_value:
             min_value -= 1
             max_value += 1
+
+        ticks = _box_plot_ticks(min_value, max_value)
+        metrics = painter.fontMetrics()
+        tick_label_width = max(
+            metrics.horizontalAdvance(f"{tick:.1f}") for tick in ticks
+        )
+        left = max(64, tick_label_width + 24)
+        top = 32
+        right = self.width() - 28
+        bottom = self.height() - 78
+        if right <= left or bottom <= top:
+            return
+
+        for tick in ticks:
+            y = _box_plot_y(tick, min_value, max_value, top, bottom)
+            label = f"{tick:.1f}"
+            painter.setPen(QPen(QColor(43, 51, 63), 1))
+            painter.drawLine(left, y, right, y)
+            painter.setPen(QPen(QColor(188, 196, 208), 1))
+            painter.drawLine(left - 5, y, left, y)
+            painter.drawText(
+                left - 10 - metrics.horizontalAdvance(label),
+                y + metrics.ascent() // 2 - 2,
+                label,
+            )
 
         painter.setPen(QPen(QColor(94, 104, 118), 1))
         painter.drawLine(left, bottom, right, bottom)
@@ -347,7 +365,6 @@ class ImageCanvas(QWidget):
         buckets = _box_plot_buckets(points)
         bucket_count = len(buckets)
         bucket_width = (right - left) / max(1, bucket_count)
-        metrics = painter.fontMetrics()
         for bucket_index, ((group, measurement_type), bucket_values) in enumerate(buckets):
             center_x = round(left + bucket_width * (bucket_index + 0.5))
             color = MEASUREMENT_COLORS[measurement_type]
@@ -394,10 +411,6 @@ class ImageCanvas(QWidget):
                 bottom + 52,
                 type_label,
             )
-
-        painter.setPen(QPen(QColor(220, 226, 235), 1))
-        painter.drawText(left, 30, f"Box Plot ({points[0].unit})")
-        painter.drawText(left, 52, f"{min_value:.1f} to {max_value:.1f}")
 
 
 def _rect_roi_from_points(start: QPoint, end: QPoint) -> RectRoi:
@@ -1283,6 +1296,15 @@ def _box_plot_y(
 ) -> int:
     fraction = (value - min_value) / (max_value - min_value)
     return round(bottom - fraction * (bottom - top))
+
+
+def _box_plot_ticks(
+    min_value: float, max_value: float, tick_count: int = 5
+) -> list[float]:
+    if tick_count <= 1:
+        return [min_value]
+    step = (max_value - min_value) / (tick_count - 1)
+    return [min_value + step * index for index in range(tick_count)]
 
 
 def _elided_center_label(metrics, text: str, max_width: int) -> str:

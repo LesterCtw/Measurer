@@ -766,6 +766,12 @@ def test_box_plot_buckets_alternate_groups_within_each_measurement_type():
     ]
 
 
+def test_box_plot_ticks_include_range_endpoints():
+    ticks = app_module._box_plot_ticks(26.0, 60.0)
+
+    assert ticks == [26.0, 34.5, 43.0, 51.5, 60.0]
+
+
 def test_app_box_plot_refreshes_when_group_changes_without_remeasure(qapp, tmp_path):
     image_path = tmp_path / "box_plot_group_refresh.tif"
     image = create_single_metal_island_image(
