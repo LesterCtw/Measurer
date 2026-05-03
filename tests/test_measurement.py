@@ -263,6 +263,50 @@ def test_metal_island_touching_roi_boundary_is_excluded():
     assert result.measurements == {}
 
 
+def test_metal_island_touching_roi_union_mask_boundary_is_excluded():
+    image = np.full((128, 220), 20, dtype=np.uint8)
+    image[30:90, 70:110] = 220
+
+    result = measure_image(
+        image,
+        roi=RoiSelection(
+            (
+                RectRoi(x=40, y=20, width=60, height=90),
+                RectRoi(x=150, y=20, width=40, height=90),
+            )
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_reason == "No metal candidates"
+    assert result.measurements == {}
+    assert result.detection is not None
+    assert len(result.detection.excluded_boundary_touch_components) == 1
+
+
+def test_roi_union_boundary_touch_diagnostics_distinguish_kept_candidates():
+    image = np.full((128, 300), 20, dtype=np.uint8)
+    image[30:90, 50:90] = 220
+    image[30:90, 150:190] = 220
+
+    result = measure_image(
+        image,
+        roi=RoiSelection(
+            (
+                RectRoi(x=30, y=20, width=80, height=90),
+                RectRoi(x=130, y=20, width=50, height=90),
+                RectRoi(x=240, y=20, width=30, height=90),
+            )
+        ),
+    )
+
+    assert result.status == "success"
+    assert len(result.metal_islands) == 1
+    assert result.detection is not None
+    assert len(result.detection.kept_candidates) == 1
+    assert len(result.detection.excluded_boundary_touch_components) == 1
+
+
 def test_metal_island_touching_full_image_boundary_is_excluded():
     image = create_single_metal_island_image(
         SingleMetalIslandSpec(

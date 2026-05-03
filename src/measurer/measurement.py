@@ -136,7 +136,7 @@ def measure_image(
     ]
     threshold = _otsu_threshold(region[analysis_mask])
     mask = (region > threshold) & analysis_mask
-    detection, candidates = _detect_metal_candidates(mask, config)
+    detection, candidates = _detect_metal_candidates(mask, analysis_mask, config)
     if not candidates:
         return MeasurementResult(
             status="failed",
@@ -268,9 +268,12 @@ def _row_spans(xs: np.ndarray, ys: np.ndarray) -> dict[int, tuple[int, int]]:
 
 
 def _detect_metal_candidates(
-    mask: np.ndarray, config: MeasurementConfig
+    mask: np.ndarray, analysis_mask: np.ndarray, config: MeasurementConfig
 ) -> tuple[DetectionDiagnostics, list[_Component]]:
     components = _connected_components(mask)
+    boundary_mask = _analysis_boundary_margin_mask(
+        analysis_mask, config.boundary_touch_margin_px
+    )
     hard_kept: list[_Component] = []
     excluded_small: list[_Component] = []
     for component in components:
@@ -294,7 +297,7 @@ def _detect_metal_candidates(
     kept_candidates: list[_Component] = []
     excluded_boundary_touch: list[_Component] = []
     for component in area_kept:
-        if _touches_analysis_boundary(component, mask.shape, config):
+        if _touches_analysis_boundary(component, boundary_mask):
             excluded_boundary_touch.append(component)
         else:
             kept_candidates.append(component)
@@ -378,16 +381,38 @@ def _connected_components(mask: np.ndarray) -> list[_Component]:
 
 
 def _touches_analysis_boundary(
-    component: _Component, mask_shape: tuple[int, int], config: MeasurementConfig
+    component: _Component, boundary_mask: np.ndarray
 ) -> bool:
-    height, width = mask_shape
-    min_x, min_y, max_x, max_y = component.bbox
-    return (
-        min_x <= config.boundary_touch_margin_px
-        or min_y <= config.boundary_touch_margin_px
-        or max_x >= width - 1 - config.boundary_touch_margin_px
-        or max_y >= height - 1 - config.boundary_touch_margin_px
+    return bool(np.any(boundary_mask[component.local_ys, component.local_xs]))
+
+
+def _analysis_boundary_margin_mask(
+    analysis_mask: np.ndarray, boundary_touch_margin_px: int
+) -> np.ndarray:
+    selected = analysis_mask.astype(bool, copy=False)
+    padded = np.pad(selected, 1, mode="constant", constant_values=False)
+    interior = (
+        padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
     )
+    boundary = selected & ~interior
+    expanded = boundary
+    for _ in range(max(0, boundary_touch_margin_px)):
+        padded_expanded = np.pad(expanded, 1, mode="constant", constant_values=False)
+        expanded = selected & (
+            padded_expanded[:-2, :-2]
+            | padded_expanded[:-2, 1:-1]
+            | padded_expanded[:-2, 2:]
+            | padded_expanded[1:-1, :-2]
+            | padded_expanded[1:-1, 1:-1]
+            | padded_expanded[1:-1, 2:]
+            | padded_expanded[2:, :-2]
+            | padded_expanded[2:, 1:-1]
+            | padded_expanded[2:, 2:]
+        )
+    return expanded
 
 
 def _component_diagnostic(component: _Component) -> ComponentDiagnostic:

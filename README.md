@@ -47,7 +47,7 @@ assets/icons/measurer.ico
 - Measure Current 只量測目前選取圖片，不自動切下一張，也不直接寫 output files。
 - 沒有 ROI 時，Measure Current 使用 full image 作為 Analysis Region；有 Custom ROI 時，只分析 rectangle ROI Union 內像素。
 - Measure Current 會在 Analysis Region 內用 Otsu rough mask 做 connected component detection。
-- candidate filtering 已支援 `HARD_MIN_COMPONENT_AREA_PX = 100`、median-area relative threshold default `MIN_AREA_RATIO_TO_MEDIAN = 0.03`，以及 bbox 距離 Analysis Region boundary <= 1 px 的 boundary-touch exclusion。
+- candidate filtering 已支援 `HARD_MIN_COMPONENT_AREA_PX = 100`、median-area relative threshold default `MIN_AREA_RATIO_TO_MEDIAN = 0.03`，以及距離 effective Analysis Region boundary <= 1 px 的 boundary-touch exclusion；Full image 用 image boundary，rectangle ROI / ROI Union 用實際 selected mask edge。
 - `MIN_AREA_RATIO_TO_MEDIAN` 可透過 measurement config 覆寫；GUI 調整欄位尚未實作。
 - 如果 filtering 後沒有 Metal Island candidate，Measure 變成 `Failed`，workspace 停在 Original View，status card 顯示 `No metal candidates`。
 - 每顆通過 filtering 的 Metal Island 會產生 ordered closed Refined Boundary，並計算 TCD、BCD、Height。
@@ -547,14 +547,15 @@ Metal candidate 數量超過 100：
 規則：
 
 ```text
-component bbox 距離 analysis boundary <= 1 px
+component 接觸或距離 effective analysis boundary <= 1 px
 ```
 
 就視為 touching boundary。
 
 有 ROI 時：
 
-- analysis boundary = ROI boundary。
+- analysis boundary = 實際 selected ROI mask edge。
+- 多個 rectangle ROI Shapes 時，ROI Union 內每個 selected mask edge 都會視為 boundary。
 
 沒有 ROI 時：
 
