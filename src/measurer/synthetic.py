@@ -26,7 +26,7 @@ def create_single_metal_island_image(spec: SingleMetalIslandSpec) -> np.ndarray:
         dtype=np.uint8,
     )
     top_rows = max(1, ceil(spec.height * 0.2))
-    bottom_rows = max(1, ceil(spec.height * 0.1))
+    bottom_rows = max(1, ceil(spec.height * 0.05))
     transition_rows = max(1, spec.height - top_rows - bottom_rows)
 
     for row_offset in range(spec.height):

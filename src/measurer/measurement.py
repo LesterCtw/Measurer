@@ -879,7 +879,7 @@ def _measure_single_metal_island(
     max_y = rows[-1]
     height = max_y - min_y + 1
     top_row_count = max(1, ceil(height * 0.2))
-    bottom_row_count = max(1, ceil(height * 0.1))
+    bottom_row_count = max(1, ceil(height * 0.05))
 
     tcd_rows = [y for y in rows if y <= min_y + top_row_count - 1]
     bcd_rows = [y for y in rows if y >= max_y - bottom_row_count + 1]

@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 
 from measurer.image_queue import RectRoi
-from measurer.measurement import MeasurementConfig, Point, measure_image
+from measurer.measurement import (
+    MeasurementConfig,
+    Point,
+    _measure_single_metal_island,
+    measure_image,
+)
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
 
@@ -31,6 +36,32 @@ def test_measure_clean_single_metal_island_full_image():
     assert result.measurements["TCD"].value_px == pytest.approx(32)
     assert result.measurements["BCD"].value_px == pytest.approx(48)
     assert result.measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_bcd_uses_bottom_five_percent_region():
+    mask = np.zeros((140, 160), dtype=bool)
+    spans: dict[int, tuple[int, int]] = {}
+
+    for y in range(20, 120):
+        width = 32
+        if 110 <= y < 115:
+            width = 80
+        elif y >= 115:
+            width = 40
+
+        left = 80 - width // 2
+        right = left + width - 1
+        mask[y, left : right + 1] = True
+        spans[y] = (left, right)
+
+    measurements = _measure_single_metal_island(
+        spans,
+        mask,
+        RectRoi(x=0, y=0, width=160, height=140),
+    )
+
+    assert measurements["BCD"].value_px == pytest.approx(40)
+    assert measurements["BCD"].line.start.y >= 115
 
 
 def test_custom_roi_limits_the_analysis_region():

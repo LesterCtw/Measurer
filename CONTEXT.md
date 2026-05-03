@@ -37,7 +37,7 @@ The maximum horizontal width of a Metal Island within its top 20% height region.
 _Avoid_: top width
 
 **BCD**:
-The maximum horizontal width of a Metal Island within its bottom 10% height region.
+The maximum horizontal width of a Metal Island within its bottom 5% height region.
 _Avoid_: bottom width
 
 **Height**:

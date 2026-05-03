@@ -61,7 +61,7 @@ assets/icons/measurer.ico
 - 即使 fallback ratio 很高，只要 TCD / BCD / Height 可產生 reportable value，Measure status 仍為 `Measured` / measurement result status 仍為 `success`。
 - refinement diagnostics 已提供 `refined_point_count`、`fallback_point_count`、`fallback_ratio`，供 Debug View 與未來 Trace Sheet 使用。
 - TCD 使用 top 20% height region 內的最大 horizontal width。
-- BCD 使用 bottom 10% height region 內的最大 horizontal width。
+- BCD 使用 bottom 5% height region 內的最大 horizontal width。
 - Height 使用 Refined Boundary 內的最大 vertical chord length。
 - 成功 Measure Current 後，該圖 Measure 變成 `Measured`，Export 維持 `Not exported`，workspace 切到 Result View。
 - Result View 會顯示原圖加上成功的 TCD / BCD / Height / Horizontal Space / Vertical Space Measurement Lines 與一位小數值，不顯示 ROI 或 debug internals。
@@ -755,14 +755,14 @@ metal island top 20% height region 內的水平最大寬度
 定義：
 
 ```text
-metal island bottom 10% height region 內的水平最大寬度
+metal island bottom 5% height region 內的水平最大寬度
 ```
 
 流程：
 
 ```text
 1. 取得 refined boundary bounding box
-2. 定義 bottom 10% 高度範圍
+2. 定義 bottom 5% 高度範圍
 3. 每 1 px 做水平 scan line
 4. scan line 與 refined boundary 相交
 5. 取得左右交點
