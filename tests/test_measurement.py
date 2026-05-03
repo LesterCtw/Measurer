@@ -1,7 +1,7 @@
 import pytest
 
 from measurer.image_queue import RectRoi
-from measurer.measurement import MeasurementConfig, measure_image
+from measurer.measurement import MeasurementConfig, Point, measure_image
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
 
@@ -335,6 +335,45 @@ def test_measure_horizontal_space_between_same_row_adjacent_metal_islands():
     result = measure_image(image, roi=None)
 
     assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(44)
+
+
+def test_horizontal_space_line_uses_inner_bcd_endpoints():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=60,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    right_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=220,
+            image_height=128,
+            center_x=150,
+            top_y=24,
+            height=60,
+            tcd=30,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[right_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    left_bcd_line = result.metal_islands[0].measurements["BCD"].line
+    right_bcd_line = result.metal_islands[1].measurements["BCD"].line
+    expected_y = round((left_bcd_line.end.y + right_bcd_line.start.y) / 2)
+    line = result.measurements["M001-M002 Horizontal Space"].line
+
+    assert line.start == Point(x=left_bcd_line.end.x, y=expected_y)
+    assert line.end == Point(x=right_bcd_line.start.x, y=expected_y)
+    assert line.start.y == expected_y
+    assert line.end.y == expected_y
 
 
 def test_measure_vertical_space_between_same_column_adjacent_metal_islands():

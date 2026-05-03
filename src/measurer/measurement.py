@@ -457,19 +457,17 @@ def _measure_horizontal_spaces(
                 )
                 continue
 
-            y = round(
-                (
-                    _boundary_center(left.refined_boundary)[1]
-                    + _boundary_center(right.refined_boundary)[1]
-                )
-                / 2
+            left_endpoint, right_endpoint = _horizontal_space_display_endpoints(
+                left,
+                right,
             )
+            y = round((left_endpoint.y + right_endpoint.y) / 2)
             measurements[name] = Measurement(
                 name=name,
                 value_px=float(right_bbox[0] - left_bbox[2]),
                 line=MeasurementLine(
-                    start=Point(x=left_bbox[2], y=y),
-                    end=Point(x=right_bbox[0], y=y),
+                    start=Point(x=left_endpoint.x, y=y),
+                    end=Point(x=right_endpoint.x, y=y),
                 ),
             )
     return measurements, rejected_pairs
@@ -675,6 +673,14 @@ def _boundary_bbox(boundary: RefinedBoundary) -> tuple[int, int, int, int]:
 def _boundary_center(boundary: RefinedBoundary) -> tuple[float, float]:
     min_x, min_y, max_x, max_y = _boundary_bbox(boundary)
     return (min_x + max_x) / 2, (min_y + max_y) / 2
+
+
+def _horizontal_space_display_endpoints(
+    left: MetalIsland, right: MetalIsland
+) -> tuple[Point, Point]:
+    left_bcd = left.measurements["BCD"].line
+    right_bcd = right.measurements["BCD"].line
+    return left_bcd.end, right_bcd.start
 
 
 def _refined_boundary_from_spans(
