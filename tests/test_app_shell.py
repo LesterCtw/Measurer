@@ -177,11 +177,38 @@ def test_roi_drag_preview_maps_fitted_canvas_to_image_coordinates(qapp, tmp_path
         pos=QPoint(600, 300),
     )
 
-    assert window.queue.rows[0].roi is not None
-    assert window.queue.rows[0].roi.x == 50
-    assert window.queue.rows[0].roi.y == 25
-    assert window.queue.rows[0].roi.width == 100
-    assert window.queue.rows[0].roi.height == 50
+    assert window.queue.rows[0].roi.rectangles == (
+        app_module.RectRoi(x=50, y=25, width=100, height=50),
+    )
+    assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
+
+
+def test_roi_drag_appends_multiple_rectangle_shapes(qapp, tmp_path):
+    image_path = tmp_path / "multi_roi.tif"
+    tifffile.imwrite(image_path, np.ones((100, 200), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(800, 400)
+    qapp.processEvents()
+
+    QTest.mousePress(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(200, 100))
+    QTest.mouseRelease(
+        window.image_label,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(600, 300),
+    )
+    QTest.mousePress(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+    QTest.mouseRelease(
+        window.image_label,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(120, 120),
+    )
+
+    assert window.queue.rows[0].roi.rectangles == (
+        app_module.RectRoi(x=50, y=25, width=100, height=50),
+        app_module.RectRoi(x=10, y=10, width=20, height=20),
+    )
     assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
 
 
@@ -405,7 +432,32 @@ def test_app_sets_and_clears_roi_for_selected_image(qapp, tmp_path):
     window.clear_roi_button.click()
 
     assert _queue_status_text(window, 0)[0] == "Full image · Pending"
-    assert window.queue.rows[0].roi is None
+    assert window.queue.rows[0].roi.is_empty
+
+
+def test_app_undo_roi_removes_latest_rectangle_shape(qapp, tmp_path):
+    image_path = tmp_path / "undo_roi.tif"
+    tifffile.imwrite(image_path, np.ones((10, 20), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.set_selected_roi(1, 1, 5, 5)
+    window.set_selected_roi(10, 2, 5, 6)
+    window.queue.record_measurement_result(0, {"measurements": [1]})
+
+    window.undo_roi_button.click()
+
+    assert window.queue.rows[0].roi.rectangles == (
+        app_module.RectRoi(x=1, y=1, width=5, height=5),
+    )
+    assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
+    assert window.file_table.item(0, 4).text() == "Pending"
+    assert window.file_table.item(0, 5).text() == "Not exported"
+
+    window.undo_roi_button.click()
+
+    assert window.queue.rows[0].roi.is_empty
+    assert _queue_status_text(window, 0)[0] == "Full image · Pending"
 
 
 def test_app_measure_current_keeps_too_small_roi_pending(qapp, tmp_path):

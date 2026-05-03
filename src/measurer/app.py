@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
 
 from measurer.app_icon import load_application_icon
 from measurer.export import OverwriteSummary, export_measured_batch
-from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi
+from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi, RoiSelection
+from measurer.image_queue import roi_union_area_px
 from measurer.measurement import (
     HARD_MIN_COMPONENT_AREA_PX,
     Measurement,
@@ -68,7 +69,7 @@ class ImageCanvas(QWidget):
         super().__init__()
         self._roi_callback = roi_callback
         self._pixmap: QPixmap | None = None
-        self._roi: RectRoi | None = None
+        self._roi = RoiSelection()
         self._show_roi = False
         self._measurement_result: MeasurementResult | None = None
         self._measurement_nm_per_px: float | None = None
@@ -92,7 +93,9 @@ class ImageCanvas(QWidget):
     def pixmap(self) -> QPixmap | None:
         return self._pixmap
 
-    def set_roi(self, roi: RectRoi | None, *, visible: bool) -> None:
+    def set_roi(self, roi: RoiSelection | None, *, visible: bool) -> None:
+        if roi is None:
+            roi = RoiSelection()
         self._roi = roi
         self._show_roi = visible
         self.update()
@@ -108,7 +111,7 @@ class ImageCanvas(QWidget):
         self._pixmap = None
         self._measurement_result = None
         self._measurement_nm_per_px = None
-        self._roi = None
+        self._roi = RoiSelection()
         self._show_roi = False
         self._box_plot_points = points
         self._box_plot_warning = warning
@@ -146,8 +149,9 @@ class ImageCanvas(QWidget):
         if self._measurement_result is not None:
             self._draw_measurement_overlay(painter, self._measurement_result)
 
-        if self._show_roi and self._roi is not None:
-            self._draw_roi(painter, self._roi, QColor("#40c4ff"))
+        if self._show_roi and not self._roi.is_empty:
+            for roi in self._roi.rectangles:
+                self._draw_roi(painter, roi, QColor("#40c4ff"))
 
         preview = self.roi_preview()
         if preview is not None:
@@ -444,6 +448,8 @@ class MeasurerWindow(QMainWindow):
         self.scale_input.setPlaceholderText("nm / pixel")
         self.scale_input.editingFinished.connect(self._apply_scale_to_selected_image)
         self.scale_error_label = QLabel("")
+        self.undo_roi_button = QPushButton("Undo ROI")
+        self.undo_roi_button.clicked.connect(self._undo_selected_roi)
         self.clear_roi_button = QPushButton("Clear ROI")
         self.clear_roi_button.clicked.connect(self._clear_selected_roi)
         self.measure_current_button = QPushButton("Measure Current")
@@ -525,6 +531,7 @@ class MeasurerWindow(QMainWindow):
         controls.addWidget(self.add_images_button)
         controls.addWidget(self.scale_input)
         controls.addWidget(self.scale_error_label)
+        controls.addWidget(self.undo_roi_button)
         controls.addWidget(self.clear_roi_button)
         controls.addWidget(self.measure_current_button)
         controls.addWidget(self.export_button)
@@ -695,13 +702,23 @@ class MeasurerWindow(QMainWindow):
             self.file_table.setCurrentCell(row_index, 1)
             self._select_image(row_index)
 
+    def _undo_selected_roi(self) -> None:
+        row_index = self.file_table.currentRow()
+        if row_index < 0:
+            return
+
+        if self.queue.undo_roi(row_index):
+            self._refresh_file_table()
+            self.file_table.setCurrentCell(row_index, 1)
+            self._select_image(row_index)
+
     def _measure_selected_image(self) -> None:
         row_index = self.file_table.currentRow()
         if row_index < 0 or row_index >= len(self.queue.rows):
             return
 
         row = self.queue.rows[row_index]
-        if _roi_is_too_small(row.roi):
+        if _roi_is_too_small(row.roi, row.image):
             self.status_label.setText("ROI is too small.")
             return
 
@@ -968,10 +985,10 @@ def _group_badge_colors(group: str) -> tuple[str, str, str]:
     return palettes[index]
 
 
-def _roi_is_too_small(roi: RectRoi | None) -> bool:
-    if roi is None:
+def _roi_is_too_small(roi: RoiSelection, image: np.ndarray) -> bool:
+    if roi.is_empty:
         return False
-    return roi.width * roi.height < HARD_MIN_COMPONENT_AREA_PX
+    return roi_union_area_px(roi, image) < HARD_MIN_COMPONENT_AREA_PX
 
 
 def _array_to_pixmap(image: np.ndarray) -> QPixmap:

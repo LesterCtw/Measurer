@@ -375,7 +375,7 @@ def test_roi_is_clamped_and_clears_stale_measurement_state(tmp_path):
     assert queue.set_roi(0, RectRoi(x=-5, y=2, width=30, height=20)) is True
 
     row = queue.rows[0]
-    assert row.roi == RectRoi(x=0, y=2, width=20, height=8)
+    assert row.roi.rectangles == (RectRoi(x=0, y=2, width=20, height=8),)
     assert row.roi_status == "Custom ROI"
     assert row.measure_status == "Pending"
     assert row.export_status == "Not exported"
@@ -385,7 +385,73 @@ def test_roi_is_clamped_and_clears_stale_measurement_state(tmp_path):
     assert queue.clear_roi(0) is True
 
     row = queue.rows[0]
-    assert row.roi is None
+    assert row.roi.is_empty
+    assert row.roi_status == "Full image"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+
+def test_setting_roi_appends_rectangle_shapes_and_clears_stale_measurement_state(
+    tmp_path,
+):
+    image_path = tmp_path / "multi_roi.tif"
+    image = np.ones((40, 60), dtype=np.uint8)
+
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.record_measurement_result(0, {"measurements": [1]})
+
+    assert queue.set_roi(0, RectRoi(x=2, y=3, width=10, height=12)) is True
+    assert queue.set_roi(0, RectRoi(x=30, y=20, width=15, height=10)) is True
+
+    row = queue.rows[0]
+    assert row.roi.rectangles == (
+        RectRoi(x=2, y=3, width=10, height=12),
+        RectRoi(x=30, y=20, width=15, height=10),
+    )
+    assert row.roi_status == "Custom ROI"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+
+def test_undo_roi_removes_latest_rectangle_shape_and_returns_to_full_image(
+    tmp_path,
+):
+    image_path = tmp_path / "undo_roi.tif"
+    image = np.ones((40, 60), dtype=np.uint8)
+
+    queue = ImageQueue()
+    queue.add_image_data(image_path, image)
+    queue.set_roi(0, RectRoi(x=2, y=3, width=10, height=12))
+    queue.set_roi(0, RectRoi(x=30, y=20, width=15, height=10))
+    queue.record_measurement_result(0, {"measurements": [1]})
+
+    assert queue.undo_roi(0) is True
+
+    row = queue.rows[0]
+    assert row.roi.rectangles == (RectRoi(x=2, y=3, width=10, height=12),)
+    assert row.roi_status == "Custom ROI"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+    queue.record_measurement_result(0, {"measurements": [1]})
+    assert queue.undo_roi(0) is True
+
+    row = queue.rows[0]
+    assert row.roi.is_empty
+    assert row.roi_status == "Full image"
+    assert row.measure_status == "Pending"
+    assert row.export_status == "Not exported"
+    assert row.measurement_results is None
+
+    queue.record_measurement_result(0, {"measurements": [1]})
+    assert queue.clear_roi(0) is True
+
+    row = queue.rows[0]
+    assert row.roi.is_empty
     assert row.roi_status == "Full image"
     assert row.measure_status == "Pending"
     assert row.export_status == "Not exported"

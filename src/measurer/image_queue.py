@@ -28,6 +28,26 @@ class RectRoi:
 
 
 @dataclass(frozen=True)
+class RoiSelection:
+    rectangles: tuple[RectRoi, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self.rectangles) == 0
+
+    @property
+    def bounding_box(self) -> RectRoi | None:
+        if self.is_empty:
+            return None
+
+        left = min(rect.x for rect in self.rectangles)
+        top = min(rect.y for rect in self.rectangles)
+        right = max(rect.x + rect.width for rect in self.rectangles)
+        bottom = max(rect.y + rect.height for rect in self.rectangles)
+        return RectRoi(x=left, y=top, width=right - left, height=bottom - top)
+
+
+@dataclass(frozen=True)
 class QueueRow:
     path: Path
     file_name: str
@@ -36,7 +56,7 @@ class QueueRow:
     metadata_nm_per_px: float | None = None
     manual_nm_per_px: float | None = None
     scale_error: str = ""
-    roi: RectRoi | None = None
+    roi: RoiSelection = field(default_factory=RoiSelection)
     roi_status: str = "Full image"
     measure_status: str = "Pending"
     export_status: str = "Not exported"
@@ -236,9 +256,10 @@ class ImageQueue:
         if clamped_roi is None:
             return False
 
+        roi_selection = RoiSelection(row.roi.rectangles + (clamped_roi,))
         self.rows[row_index] = replace(
             row,
-            roi=clamped_roi,
+            roi=roi_selection,
             roi_status="Custom ROI",
             measure_status="Pending",
             export_status="Not exported",
@@ -253,8 +274,28 @@ class ImageQueue:
 
         self.rows[row_index] = replace(
             self.rows[row_index],
-            roi=None,
+            roi=RoiSelection(),
             roi_status="Full image",
+            measure_status="Pending",
+            export_status="Not exported",
+            measurement_results=None,
+            measurement_debug=None,
+        )
+        return True
+
+    def undo_roi(self, row_index: int) -> bool:
+        if row_index < 0 or row_index >= len(self.rows):
+            return False
+
+        row = self.rows[row_index]
+        if row.roi.is_empty:
+            return False
+
+        roi_selection = RoiSelection(row.roi.rectangles[:-1])
+        self.rows[row_index] = replace(
+            row,
+            roi=roi_selection,
+            roi_status="Full image" if roi_selection.is_empty else "Custom ROI",
             measure_status="Pending",
             export_status="Not exported",
             measurement_results=None,
@@ -384,3 +425,19 @@ def _clamp_roi_to_image(roi: RectRoi, image: np.ndarray) -> RectRoi | None:
     if width <= 0 or height <= 0:
         return None
     return RectRoi(x=left, y=top, width=width, height=height)
+
+
+def roi_union_area_px(roi: RoiSelection, image: np.ndarray) -> int:
+    if roi.is_empty:
+        return image.size
+
+    mask = np.zeros(image.shape, dtype=bool)
+    for rectangle in roi.rectangles:
+        clamped = _clamp_roi_to_image(rectangle, image)
+        if clamped is None:
+            continue
+        mask[
+            clamped.y : clamped.y + clamped.height,
+            clamped.x : clamped.x + clamped.width,
+        ] = True
+    return int(np.count_nonzero(mask))

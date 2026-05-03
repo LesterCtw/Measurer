@@ -300,7 +300,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
                     result=result,
                     scale_source=scale_resolution.source,
                     scale_nm_per_px=scale_resolution.nm_per_px,
-                    roi_type="rectangle" if row.roi is not None else "full_image",
+                    roi_type="rectangle" if not row.roi.is_empty else "full_image",
                 )
             )
 

@@ -5,7 +5,7 @@ from math import ceil
 
 import numpy as np
 
-from measurer.image_queue import RectRoi
+from measurer.image_queue import RectRoi, RoiSelection
 
 HARD_MIN_COMPONENT_AREA_PX = 100
 MIN_AREA_RATIO_TO_MEDIAN = 0.03
@@ -124,17 +124,18 @@ class MeasurementResult:
 
 def measure_image(
     image: np.ndarray,
-    roi: RectRoi | None,
+    roi: RectRoi | RoiSelection | None,
     config: MeasurementConfig | None = None,
 ) -> MeasurementResult:
     config = config or MeasurementConfig()
     analysis_region = _analysis_region_for(image, roi)
+    analysis_mask = _analysis_mask_for(image, roi, analysis_region)
     region = image[
         analysis_region.y : analysis_region.y + analysis_region.height,
         analysis_region.x : analysis_region.x + analysis_region.width,
     ]
-    threshold = _otsu_threshold(region)
-    mask = region > threshold
+    threshold = _otsu_threshold(region[analysis_mask])
+    mask = (region > threshold) & analysis_mask
     detection, candidates = _detect_metal_candidates(mask, config)
     if not candidates:
         return MeasurementResult(
@@ -150,6 +151,7 @@ def measure_image(
         image=image,
         candidates=candidates,
         analysis_region=analysis_region,
+        analysis_mask=analysis_mask,
         config=config,
     )
     measurements = _flatten_metal_measurements(metal_islands)
@@ -170,16 +172,67 @@ def measure_image(
     )
 
 
-def _analysis_region_for(image: np.ndarray, roi: RectRoi | None) -> RectRoi:
+def _analysis_region_for(
+    image: np.ndarray, roi: RectRoi | RoiSelection | None
+) -> RectRoi:
     image_height, image_width = image.shape
-    if roi is None:
+    if roi is None or (isinstance(roi, RoiSelection) and roi.is_empty):
         return RectRoi(x=0, y=0, width=image_width, height=image_height)
 
+    if isinstance(roi, RoiSelection):
+        clamped_rectangles = [
+            clamped for rect in roi.rectangles if (clamped := _clamped_roi(rect, image))
+        ]
+        if not clamped_rectangles:
+            return RectRoi(x=0, y=0, width=image_width, height=image_height)
+
+        left = min(rect.x for rect in clamped_rectangles)
+        top = min(rect.y for rect in clamped_rectangles)
+        right = max(rect.x + rect.width for rect in clamped_rectangles)
+        bottom = max(rect.y + rect.height for rect in clamped_rectangles)
+        return RectRoi(x=left, y=top, width=right - left, height=bottom - top)
+
+    clamped_roi = _clamped_roi(roi, image)
+    if clamped_roi is None:
+        return RectRoi(x=0, y=0, width=0, height=0)
+    return clamped_roi
+
+
+def _analysis_mask_for(
+    image: np.ndarray,
+    roi: RectRoi | RoiSelection | None,
+    analysis_region: RectRoi,
+) -> np.ndarray:
+    mask = np.ones((analysis_region.height, analysis_region.width), dtype=bool)
+    if roi is None or isinstance(roi, RectRoi) or (
+        isinstance(roi, RoiSelection) and roi.is_empty
+    ):
+        return mask
+
+    mask[:, :] = False
+    for rect in roi.rectangles:
+        clamped = _clamped_roi(rect, image)
+        if clamped is None:
+            continue
+        left = clamped.x - analysis_region.x
+        top = clamped.y - analysis_region.y
+        right = left + clamped.width
+        bottom = top + clamped.height
+        mask[top:bottom, left:right] = True
+    return mask
+
+
+def _clamped_roi(roi: RectRoi, image: np.ndarray) -> RectRoi | None:
+    image_height, image_width = image.shape
     left = max(0, roi.x)
     top = max(0, roi.y)
     right = min(image_width, roi.x + roi.width)
     bottom = min(image_height, roi.y + roi.height)
-    return RectRoi(x=left, y=top, width=right - left, height=bottom - top)
+    width = right - left
+    height = bottom - top
+    if width <= 0 or height <= 0:
+        return None
+    return RectRoi(x=left, y=top, width=width, height=height)
 
 
 def _otsu_threshold(region: np.ndarray) -> float:
@@ -345,6 +398,7 @@ def _measure_metal_islands(
     image: np.ndarray,
     candidates: list[_Component],
     analysis_region: RectRoi,
+    analysis_mask: np.ndarray,
     config: MeasurementConfig,
 ) -> list[MetalIsland]:
     measured: list[tuple[_Component, RefinedBoundary, dict[str, Measurement]]] = []
@@ -360,7 +414,9 @@ def _measure_metal_islands(
         global_ys = candidate.local_ys + analysis_region.y
         global_xs = candidate.local_xs + analysis_region.x
         spans = _row_spans(global_xs, global_ys)
-        boundary = _refined_boundary_from_spans(image, spans, analysis_region, config)
+        boundary = _refined_boundary_from_spans(
+            image, spans, analysis_region, analysis_mask, config
+        )
         measurements = _measure_single_metal_island(
             spans, candidate_mask, analysis_region
         )
@@ -697,6 +753,7 @@ def _refined_boundary_from_spans(
     image: np.ndarray,
     spans: dict[int, tuple[int, int]],
     analysis_region: RectRoi,
+    analysis_mask: np.ndarray,
     config: MeasurementConfig,
 ) -> RefinedBoundary:
     boundary_points: list[BoundaryPoint] = []
@@ -708,6 +765,7 @@ def _refined_boundary_from_spans(
                 rough_point=rough_point,
                 inside_direction=(1, 0),
                 analysis_region=analysis_region,
+                analysis_mask=analysis_mask,
                 config=config,
             )
         )
@@ -720,6 +778,7 @@ def _refined_boundary_from_spans(
                 rough_point=rough_point,
                 inside_direction=(-1, 0),
                 analysis_region=analysis_region,
+                analysis_mask=analysis_mask,
                 config=config,
             )
         )
@@ -740,6 +799,7 @@ def _refine_boundary_point(
     rough_point: Point,
     inside_direction: tuple[int, int],
     analysis_region: RectRoi,
+    analysis_mask: np.ndarray,
     config: MeasurementConfig,
 ) -> BoundaryPoint:
     profile = _sample_boundary_profile(
@@ -747,6 +807,7 @@ def _refine_boundary_point(
         rough_point=rough_point,
         inside_direction=inside_direction,
         analysis_region=analysis_region,
+        analysis_mask=analysis_mask,
         config=config,
     )
     outside_samples = [value for offset, value in profile if offset < 0]
@@ -812,6 +873,7 @@ def _sample_boundary_profile(
     rough_point: Point,
     inside_direction: tuple[int, int],
     analysis_region: RectRoi,
+    analysis_mask: np.ndarray,
     config: MeasurementConfig,
 ) -> list[tuple[int, float]]:
     profile: list[tuple[int, float]] = []
@@ -824,6 +886,7 @@ def _sample_boundary_profile(
             inside_direction=inside_direction,
             normal_offset=offset,
             analysis_region=analysis_region,
+            analysis_mask=analysis_mask,
             averaging_width=config.boundary_profile_averaging_width_px,
         )
         if sample is not None:
@@ -837,6 +900,7 @@ def _profile_sample_median(
     inside_direction: tuple[int, int],
     normal_offset: int,
     analysis_region: RectRoi,
+    analysis_mask: np.ndarray,
     averaging_width: int,
 ) -> float | None:
     inside_dx, inside_dy = inside_direction
@@ -854,7 +918,7 @@ def _profile_sample_median(
             + normal_offset * inside_dy
             + tangent_offset * tangent_dy
         )
-        if _point_inside_analysis_region(x, y, analysis_region):
+        if _point_inside_analysis_region(x, y, analysis_region, analysis_mask):
             values.append(float(image[y, x]))
 
     if not values:
@@ -862,11 +926,15 @@ def _profile_sample_median(
     return float(np.median(values))
 
 
-def _point_inside_analysis_region(x: int, y: int, analysis_region: RectRoi) -> bool:
-    return (
+def _point_inside_analysis_region(
+    x: int, y: int, analysis_region: RectRoi, analysis_mask: np.ndarray
+) -> bool:
+    if not (
         analysis_region.x <= x < analysis_region.x + analysis_region.width
         and analysis_region.y <= y < analysis_region.y + analysis_region.height
-    )
+    ):
+        return False
+    return bool(analysis_mask[y - analysis_region.y, x - analysis_region.x])
 
 
 def _measure_single_metal_island(

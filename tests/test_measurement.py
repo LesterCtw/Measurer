@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from measurer.image_queue import RectRoi
+from measurer.image_queue import RectRoi, RoiSelection
 from measurer.measurement import (
     MeasurementConfig,
     Point,
@@ -82,6 +82,68 @@ def test_custom_roi_limits_the_analysis_region():
 
     assert result.status == "success"
     assert result.analysis_region == RectRoi(x=20, y=16, width=72, height=88)
+    assert result.measurements["TCD"].value_px == pytest.approx(32)
+    assert result.measurements["BCD"].value_px == pytest.approx(48)
+    assert result.measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_rectangle_roi_union_ignores_pixels_outside_selected_shapes():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=128,
+            center_x=54,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    image[20:95, 120:150] = 255
+
+    result = measure_image(
+        image,
+        roi=RoiSelection(
+            (
+                RectRoi(x=20, y=16, width=72, height=88),
+                RectRoi(x=160, y=16, width=10, height=88),
+            )
+        ),
+    )
+
+    assert result.status == "success"
+    assert result.analysis_region == RectRoi(x=20, y=16, width=150, height=88)
+    assert len(result.metal_islands) == 1
+    assert result.measurements["TCD"].value_px == pytest.approx(32)
+    assert result.measurements["BCD"].value_px == pytest.approx(48)
+    assert result.measurements["Height"].value_px == pytest.approx(60)
+
+
+def test_overlapping_rectangle_roi_shapes_do_not_duplicate_measurements():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+
+    result = measure_image(
+        image,
+        roi=RoiSelection(
+            (
+                RectRoi(x=20, y=16, width=70, height=88),
+                RectRoi(x=35, y=16, width=70, height=88),
+            )
+        ),
+    )
+
+    assert result.status == "success"
+    assert len(result.metal_islands) == 1
     assert result.measurements["TCD"].value_px == pytest.approx(32)
     assert result.measurements["BCD"].value_px == pytest.approx(48)
     assert result.measurements["Height"].value_px == pytest.approx(60)
