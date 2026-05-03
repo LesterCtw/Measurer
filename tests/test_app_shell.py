@@ -1,8 +1,9 @@
 import numpy as np
 import tifffile
-from PySide6.QtCore import QItemSelectionModel
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtCore import QItemSelectionModel, QPoint, Qt
+from PySide6.QtGui import QColor, QImage
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QCheckBox, QFileDialog
 
 import measurer.app as app_module
 from measurer.app import create_window
@@ -81,7 +82,7 @@ def test_app_measures_dm3_without_metadata_in_px(qapp, monkeypatch, tmp_path):
 
     assert summary.added_count == 1
     assert window.file_table.item(0, 4).text() == "Measured"
-    assert "TCD 32.0 px" in window.result_values_label.text()
+    assert "TCD: 32.0 px (n=1)" in window.result_values_label.text()
 
 
 def test_app_shows_selected_image_in_original_preview(qapp, tmp_path):
@@ -101,6 +102,93 @@ def test_app_shows_selected_image_in_original_preview(qapp, tmp_path):
     assert first_size.height() == 6
     assert selected_size.width() == 7
     assert selected_size.height() == 9
+
+
+def test_original_preview_size_hint_does_not_follow_large_image(qapp, tmp_path):
+    image_path = tmp_path / "large_preview.tif"
+    tifffile.imwrite(image_path, np.ones((1800, 2400), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.original_view_button.click()
+
+    hint = window.image_label.sizeHint()
+    assert hint.width() <= 900
+    assert hint.height() <= 700
+
+
+def test_roi_drag_preview_maps_fitted_canvas_to_image_coordinates(qapp, tmp_path):
+    image_path = tmp_path / "fit_roi.tif"
+    tifffile.imwrite(image_path, np.ones((100, 200), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(800, 400)
+    qapp.processEvents()
+
+    QTest.mousePress(window.image_label, Qt.MouseButton.LeftButton, pos=QPoint(200, 100))
+    QTest.mouseMove(window.image_label, QPoint(600, 300))
+
+    preview = window.image_label.roi_preview()
+    assert preview is not None
+    assert preview.x == 50
+    assert preview.y == 25
+    assert preview.width == 100
+    assert preview.height == 50
+
+    QTest.mouseRelease(
+        window.image_label,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(600, 300),
+    )
+
+    assert window.queue.rows[0].roi is not None
+    assert window.queue.rows[0].roi.x == 50
+    assert window.queue.rows[0].roi.y == 25
+    assert window.queue.rows[0].roi.width == 100
+    assert window.queue.rows[0].roi.height == 50
+    assert window.file_table.item(0, 3).text() == "Custom ROI"
+
+
+def test_roi_outline_does_not_fill_the_selected_region(qapp, tmp_path):
+    image_path = tmp_path / "roi_outline.tif"
+    tifffile.imwrite(image_path, np.ones((100, 200), dtype=np.uint8) * 120)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.image_label.setFixedSize(200, 100)
+    window.set_selected_roi(50, 25, 100, 50)
+    qapp.processEvents()
+
+    rendered = _render_widget(window.image_label)
+    center_color = rendered.pixelColor(100, 50)
+    assert abs(center_color.red() - 120) <= 1
+    assert abs(center_color.green() - 120) <= 1
+    assert abs(center_color.blue() - 120) <= 1
+
+
+def test_file_queue_fits_sidebar_without_horizontal_scroll(qapp, tmp_path):
+    first_path = tmp_path / "first_measurement_source.tif"
+    second_path = tmp_path / "second_measurement_source.tif"
+    tifffile.imwrite(first_path, np.ones((20, 20), dtype=np.uint8))
+    tifffile.imwrite(second_path, np.ones((20, 20), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.file_table.setFixedWidth(360)
+    window.show()
+    qapp.processEvents()
+
+    visible_width = sum(
+        window.file_table.columnWidth(column)
+        for column in range(window.file_table.columnCount())
+        if not window.file_table.isColumnHidden(column)
+    )
+    assert window.file_table.isColumnHidden(0)
+    assert window.file_table.horizontalScrollBarPolicy() == (
+        Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    assert visible_width <= window.file_table.viewport().width() + 2
 
 
 def test_app_applies_group_and_manual_scale_to_selected_rows(qapp, tmp_path):
@@ -210,9 +298,9 @@ def test_app_measure_current_updates_only_selected_image_and_shows_result_view(
     assert window.file_table.item(1, 4).text() == "Measured"
     assert window.file_table.item(1, 5).text() == "Not exported"
     assert window.current_view_mode == "Result View"
-    assert "TCD 32.0 px" in window.result_values_label.text()
-    assert "BCD 48.0 px" in window.result_values_label.text()
-    assert "Height 60.0 px" in window.result_values_label.text()
+    assert "TCD: 32.0 px (n=1)" in window.result_values_label.text()
+    assert "BCD: 48.0 px (n=1)" in window.result_values_label.text()
+    assert "Height: 60.0 px (n=1)" in window.result_values_label.text()
 
 
 def test_app_result_view_shows_multiple_metal_islands_and_space_measurements(
@@ -249,9 +337,9 @@ def test_app_result_view_shows_multiple_metal_islands_and_space_measurements(
     window.measure_current_button.click()
 
     assert window.file_table.item(0, 4).text() == "Measured"
-    assert "M001 TCD 32.0 px" in window.result_values_label.text()
-    assert "M002 BCD 42.0 px" in window.result_values_label.text()
-    assert "M001-M002 Horizontal Space 44.0 px" in window.result_values_label.text()
+    assert "TCD: 30.0-32.0 px (n=2)" in window.result_values_label.text()
+    assert "BCD: 42.0-48.0 px (n=2)" in window.result_values_label.text()
+    assert "Horizontal Space: 44.0 px (n=1)" in window.result_values_label.text()
 
 
 def test_app_result_view_draws_measurement_type_colors(qapp, tmp_path):
@@ -285,10 +373,12 @@ def test_app_result_view_draws_measurement_type_colors(qapp, tmp_path):
 
     window.add_image_paths([image_path])
     window.measure_current_button.click()
+    window.image_label.setFixedSize(480, 440)
+    qapp.processEvents()
 
     assert "Horizontal Space" in window.result_values_label.text()
     assert "Vertical Space" in window.result_values_label.text()
-    result_image = window.image_label.pixmap().toImage()
+    result_image = _render_widget(window.image_label)
     expected_colors = [
         QColor(64, 196, 255),
         QColor(255, 183, 77),
@@ -318,16 +408,16 @@ def test_app_result_view_refreshes_values_when_manual_scale_changes(qapp, tmp_pa
 
     window.add_image_paths([image_path])
     window.measure_current_button.click()
-    assert "TCD 32.0 px" in window.result_values_label.text()
+    assert "TCD: 32.0 px (n=1)" in window.result_values_label.text()
 
     window.scale_input.setText("0.5")
     window.scale_input.editingFinished.emit()
 
     assert window.current_view_mode == "Result View"
     assert window.file_table.item(0, 4).text() == "Measured"
-    assert "TCD 16.0 nm" in window.result_values_label.text()
-    assert "BCD 24.0 nm" in window.result_values_label.text()
-    assert "Height 30.0 nm" in window.result_values_label.text()
+    assert "TCD: 16.0 nm (n=1)" in window.result_values_label.text()
+    assert "BCD: 24.0 nm (n=1)" in window.result_values_label.text()
+    assert "Height: 30.0 nm (n=1)" in window.result_values_label.text()
 
 
 def test_app_box_plot_preview_summarizes_measured_results_by_group(qapp, tmp_path):
@@ -353,8 +443,9 @@ def test_app_box_plot_preview_summarizes_measured_results_by_group(qapp, tmp_pat
     window.box_plot_view_button.click()
 
     assert window.current_view_mode == "Box Plot"
-    assert window.image_label.pixmap() is not None
-    assert not window.image_label.pixmap().isNull()
+    rendered = _render_widget(window.image_label)
+    assert rendered.width() > 0
+    assert rendered.height() > 0
     assert "Box Plot" in window.result_values_label.text()
     assert "Process A" in window.result_values_label.text()
     assert "TCD" in window.result_values_label.text()
@@ -362,6 +453,110 @@ def test_app_box_plot_preview_summarizes_measured_results_by_group(qapp, tmp_pat
     assert "Height" in window.result_values_label.text()
     assert "3 measurements" in window.result_values_label.text()
     assert "px" in window.result_values_label.text()
+
+
+def test_app_box_plot_filters_measurement_types_without_remeasure(qapp, tmp_path):
+    image_path = tmp_path / "box_plot_filter_source.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+
+    checkboxes = {
+        checkbox.text(): checkbox for checkbox in window.findChildren(QCheckBox)
+    }
+    assert set(checkboxes) >= {
+        "TCD",
+        "BCD",
+        "Height",
+        "Horizontal Space",
+        "Vertical Space",
+    }
+    for measurement_type in app_module.MEASUREMENT_TYPE_ORDER:
+        assert checkboxes[measurement_type].isChecked()
+    assert "3 measurements" in window.result_values_label.text()
+    assert "Height" in window.result_values_label.text()
+
+    checkboxes["Height"].click()
+
+    assert window.current_view_mode == "Box Plot"
+    assert window.file_table.item(0, 4).text() == "Measured"
+    assert "2 measurements" in window.result_values_label.text()
+    assert "TCD" in window.result_values_label.text()
+    assert "BCD" in window.result_values_label.text()
+    assert "Height" not in window.result_values_label.text()
+
+    checkboxes["Height"].click()
+
+    assert window.file_table.item(0, 4).text() == "Measured"
+    assert "3 measurements" in window.result_values_label.text()
+    assert "Height" in window.result_values_label.text()
+
+
+def test_app_box_plot_shows_empty_state_when_all_measurement_types_are_hidden(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "box_plot_empty_filter_source.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+
+    checkboxes = {
+        checkbox.text(): checkbox for checkbox in window.findChildren(QCheckBox)
+    }
+    for measurement_type in app_module.MEASUREMENT_TYPE_ORDER:
+        checkboxes[measurement_type].click()
+
+    rendered = _render_widget(window.image_label)
+    assert rendered.width() > 0
+    assert rendered.height() > 0
+    assert "no selected measurement types" in window.result_values_label.text()
+    assert window.file_table.item(0, 4).text() == "Measured"
+
+
+def test_box_plot_buckets_alternate_groups_within_each_measurement_type():
+    points = [
+        app_module.BoxPlotPoint("LF", "BCD", 4.0, "px"),
+        app_module.BoxPlotPoint("EF", "BCD", 3.0, "px"),
+        app_module.BoxPlotPoint("LF", "TCD", 2.0, "px"),
+        app_module.BoxPlotPoint("EF", "TCD", 1.0, "px"),
+    ]
+
+    buckets = app_module._box_plot_buckets(points)
+
+    assert [key for key, _values in buckets] == [
+        ("EF", "TCD"),
+        ("LF", "TCD"),
+        ("EF", "BCD"),
+        ("LF", "BCD"),
+    ]
 
 
 def test_app_box_plot_refreshes_when_group_changes_without_remeasure(qapp, tmp_path):
@@ -858,3 +1053,9 @@ def _image_contains_color(image, expected_color: QColor) -> bool:
             ):
                 return True
     return False
+
+
+def _render_widget(widget) -> QImage:
+    image = QImage(widget.size(), QImage.Format.Format_RGB32)
+    widget.render(image)
+    return image

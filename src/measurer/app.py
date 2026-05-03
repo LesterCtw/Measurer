@@ -5,18 +5,22 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QPoint, QRect, Qt, QSignalBlocker
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QSignalBlocker
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidgetItem,
     QTableWidget,
     QVBoxLayout,
@@ -58,38 +62,362 @@ class BoxPlotPoint:
     unit: str
 
 
-class ImageCanvas(QLabel):
+class ImageCanvas(QWidget):
     def __init__(self, roi_callback) -> None:
-        super().__init__("Original")
+        super().__init__()
         self._roi_callback = roi_callback
+        self._pixmap: QPixmap | None = None
+        self._roi: RectRoi | None = None
+        self._show_roi = False
+        self._measurement_result: MeasurementResult | None = None
+        self._measurement_nm_per_px: float | None = None
+        self._box_plot_points: list[BoxPlotPoint] | None = None
+        self._box_plot_warning = ""
         self._drag_start: QPoint | None = None
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._drag_current: QPoint | None = None
+        self.setObjectName("ImageCanvas")
+        self.setMinimumSize(520, 360)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
+
+    def setPixmap(self, pixmap: QPixmap) -> None:  # noqa: N802
+        self._pixmap = pixmap
+        self._box_plot_points = None
+        self._box_plot_warning = ""
+        self._drag_start = None
+        self._drag_current = None
+        self.update()
+
+    def pixmap(self) -> QPixmap | None:
+        return self._pixmap
+
+    def set_roi(self, roi: RectRoi | None, *, visible: bool) -> None:
+        self._roi = roi
+        self._show_roi = visible
+        self.update()
+
+    def set_measurement_overlay(
+        self, result: MeasurementResult | None, nm_per_px: float | None
+    ) -> None:
+        self._measurement_result = result
+        self._measurement_nm_per_px = nm_per_px
+        self.update()
+
+    def set_box_plot(self, points: list[BoxPlotPoint], warning: str) -> None:
+        self._pixmap = None
+        self._measurement_result = None
+        self._measurement_nm_per_px = None
+        self._roi = None
+        self._show_roi = False
+        self._box_plot_points = points
+        self._box_plot_warning = warning
+        self.update()
+
+    def roi_preview(self) -> RectRoi | None:
+        if self._drag_start is None or self._drag_current is None:
+            return None
+        return _rect_roi_from_points(self._drag_start, self._drag_current)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(720, 540)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.fillRect(self.rect(), QColor("#15171b"))
+
+        if self._box_plot_points is not None:
+            self._draw_box_plot(painter, self._box_plot_points, self._box_plot_warning)
+            return
+
+        if self._pixmap is None or self._pixmap.isNull():
+            painter.setPen(QPen(QColor("#7f8794"), 1))
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                "Add images to preview and draw ROI.",
+            )
+            return
+
+        image_rect = self._image_rect()
+        painter.drawPixmap(image_rect, self._pixmap)
+
+        if self._measurement_result is not None:
+            self._draw_measurement_overlay(painter, self._measurement_result)
+
+        if self._show_roi and self._roi is not None:
+            self._draw_roi(painter, self._roi, QColor("#40c4ff"))
+
+        preview = self.roi_preview()
+        if preview is not None:
+            self._draw_roi(painter, preview, QColor("#40c4ff"), preview=True)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.pixmap() is not None:
-            self._drag_start = event.position().toPoint()
+        if event.button() != Qt.MouseButton.LeftButton or self._pixmap is None:
+            return
+        image_point = self._widget_to_image_point(event.position().toPoint())
+        if image_point is not None:
+            self._drag_start = image_point
+            self._drag_current = image_point
+            self.update()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_start is None:
+            return
+        image_point = self._widget_to_image_point(event.position().toPoint(), clamp=True)
+        if image_point is not None:
+            self._drag_current = image_point
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:
         if self._drag_start is None or event.button() != Qt.MouseButton.LeftButton:
             return
 
-        drag_end = event.position().toPoint()
-        left = min(self._drag_start.x(), drag_end.x())
-        top = min(self._drag_start.y(), drag_end.y())
-        width = abs(drag_end.x() - self._drag_start.x())
-        height = abs(drag_end.y() - self._drag_start.y())
+        image_point = self._widget_to_image_point(event.position().toPoint(), clamp=True)
+        if image_point is not None:
+            self._drag_current = image_point
+        preview = self.roi_preview()
         self._drag_start = None
-        if width > 0 and height > 0:
-            self._roi_callback(left, top, width, height)
+        self._drag_current = None
+        self.update()
+        if preview is not None and preview.width > 0 and preview.height > 0:
+            self._roi_callback(preview.x, preview.y, preview.width, preview.height)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        self.update()
+        super().resizeEvent(event)
+
+    def _image_rect(self) -> QRect:
+        if self._pixmap is None:
+            return self.rect()
+
+        image_size = self._pixmap.size()
+        image_size.scale(self.rect().size(), Qt.AspectRatioMode.KeepAspectRatio)
+        top_left = QPoint(
+            self.rect().left() + (self.rect().width() - image_size.width()) // 2,
+            self.rect().top() + (self.rect().height() - image_size.height()) // 2,
+        )
+        return QRect(top_left, image_size)
+
+    def _widget_to_image_point(
+        self, point: QPoint, *, clamp: bool = False
+    ) -> QPoint | None:
+        if self._pixmap is None or self._pixmap.isNull():
+            return None
+
+        image_rect = self._image_rect()
+        if image_rect.width() <= 0 or image_rect.height() <= 0:
+            return None
+        if not clamp and not image_rect.contains(point):
+            return None
+
+        clamped_x = min(max(point.x(), image_rect.left()), image_rect.right())
+        clamped_y = min(max(point.y(), image_rect.top()), image_rect.bottom())
+        image_x = round(
+            (clamped_x - image_rect.left()) * self._pixmap.width() / image_rect.width()
+        )
+        image_y = round(
+            (clamped_y - image_rect.top()) * self._pixmap.height() / image_rect.height()
+        )
+        return QPoint(
+            min(max(0, image_x), self._pixmap.width()),
+            min(max(0, image_y), self._pixmap.height()),
+        )
+
+    def _draw_roi(
+        self,
+        painter: QPainter,
+        roi: RectRoi,
+        color: QColor,
+        *,
+        preview: bool = False,
+    ) -> None:
+        rect = self._roi_to_widget_rect(roi)
+
+        pen = QPen(color, 2)
+        if preview:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
+
+        painter.setBrush(color)
+        painter.setPen(QPen(QColor("#101114"), 1))
+        handle_size = 8
+        for point in [
+            rect.topLeft(),
+            rect.topRight(),
+            rect.bottomLeft(),
+            rect.bottomRight(),
+        ]:
+            painter.drawRect(
+                point.x() - handle_size // 2,
+                point.y() - handle_size // 2,
+                handle_size,
+                handle_size,
+            )
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    def _roi_to_widget_rect(self, roi: RectRoi) -> QRect:
+        image_rect = self._image_rect()
+        if self._pixmap is None or self._pixmap.isNull():
+            return QRect()
+        left = round(image_rect.left() + roi.x * image_rect.width() / self._pixmap.width())
+        top = round(image_rect.top() + roi.y * image_rect.height() / self._pixmap.height())
+        width = round(roi.width * image_rect.width() / self._pixmap.width())
+        height = round(roi.height * image_rect.height() / self._pixmap.height())
+        return QRect(left, top, max(1, width), max(1, height))
+
+    def _draw_measurement_overlay(
+        self, painter: QPainter, result: MeasurementResult
+    ) -> None:
+        unit = "px" if self._measurement_nm_per_px is None else "nm"
+        scale = 1.0 if self._measurement_nm_per_px is None else self._measurement_nm_per_px
+        placed_label_rects: list[QRect] = []
+        for measurement in result.measurements.values():
+            if measurement.status != "success":
+                continue
+            measurement_type = _measurement_type(measurement)
+            if measurement_type is None:
+                continue
+            color = MEASUREMENT_COLORS[measurement_type]
+            start = self._image_to_widget_point(
+                measurement.line.start.x, measurement.line.start.y
+            )
+            end = self._image_to_widget_point(
+                measurement.line.end.x, measurement.line.end.y
+            )
+            painter.setPen(QPen(color, 2))
+            painter.drawLine(start, end)
+
+            label = f"{measurement.value_px * scale:.1f} {unit}"
+            label_rect = _result_label_rect(
+                painter=painter,
+                text=label,
+                center_x=round((start.x() + end.x()) / 2),
+                center_y=round((start.y() + end.y()) / 2),
+                image_width=self.width(),
+                image_height=self.height(),
+                placed_rects=placed_label_rects,
+            )
+            placed_label_rects.append(label_rect)
+            _draw_outlined_text(painter, label_rect, label)
+
+    def _image_to_widget_point(self, x: int, y: int) -> QPoint:
+        image_rect = self._image_rect()
+        if self._pixmap is None or self._pixmap.isNull():
+            return QPoint()
+        return QPoint(
+            round(image_rect.left() + x * image_rect.width() / self._pixmap.width()),
+            round(image_rect.top() + y * image_rect.height() / self._pixmap.height()),
+        )
+
+    def _draw_box_plot(
+        self, painter: QPainter, points: list[BoxPlotPoint], warning: str
+    ) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if warning or not points:
+            painter.setPen(QPen(QColor(230, 235, 242), 1))
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                warning or "Box Plot: no measured data.",
+            )
+            return
+
+        left = 56
+        top = 72
+        right = self.width() - 28
+        bottom = self.height() - 78
+        if right <= left or bottom <= top:
+            return
+
+        values = [point.value for point in points]
+        min_value = min(values)
+        max_value = max(values)
+        if min_value == max_value:
+            min_value -= 1
+            max_value += 1
+
+        painter.setPen(QPen(QColor(94, 104, 118), 1))
+        painter.drawLine(left, bottom, right, bottom)
+        painter.drawLine(left, top, left, bottom)
+
+        buckets = _box_plot_buckets(points)
+        bucket_count = len(buckets)
+        bucket_width = (right - left) / max(1, bucket_count)
+        metrics = painter.fontMetrics()
+        for bucket_index, ((group, measurement_type), bucket_values) in enumerate(buckets):
+            center_x = round(left + bucket_width * (bucket_index + 0.5))
+            color = MEASUREMENT_COLORS[measurement_type]
+            sorted_values = sorted(bucket_values)
+            low = sorted_values[0]
+            high = sorted_values[-1]
+            q1 = _percentile(sorted_values, 25)
+            median = _percentile(sorted_values, 50)
+            q3 = _percentile(sorted_values, 75)
+            low_y = _box_plot_y(low, min_value, max_value, top, bottom)
+            high_y = _box_plot_y(high, min_value, max_value, top, bottom)
+            q1_y = _box_plot_y(q1, min_value, max_value, top, bottom)
+            median_y = _box_plot_y(median, min_value, max_value, top, bottom)
+            q3_y = _box_plot_y(q3, min_value, max_value, top, bottom)
+
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(center_x, high_y, center_x, low_y)
+            painter.drawRect(center_x - 14, q3_y, 28, max(2, q1_y - q3_y))
+            painter.drawLine(center_x - 16, median_y, center_x + 16, median_y)
+            painter.setBrush(color)
+            for point_index, value in enumerate(bucket_values):
+                jitter = ((point_index % 5) - 2) * 4
+                y = _box_plot_y(value, min_value, max_value, top, bottom)
+                painter.drawEllipse(center_x + jitter - 2, y - 2, 4, 4)
+
+            painter.setPen(QPen(QColor(220, 226, 235), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            group_label = _elided_center_label(metrics, group, round(bucket_width) - 12)
+            painter.drawText(
+                center_x - metrics.horizontalAdvance(group_label) // 2,
+                bottom + 28,
+                group_label,
+            )
+
+        for measurement_type, start_index, end_index in _box_plot_label_clusters(buckets):
+            cluster_left = left + bucket_width * start_index
+            cluster_right = left + bucket_width * (end_index + 1)
+            cluster_center_x = round((cluster_left + cluster_right) / 2)
+            max_label_width = round(cluster_right - cluster_left) - 12
+            type_label = _elided_center_label(metrics, measurement_type, max_label_width)
+            painter.drawText(
+                cluster_center_x - metrics.horizontalAdvance(type_label) // 2,
+                bottom + 52,
+                type_label,
+            )
+
+        painter.setPen(QPen(QColor(220, 226, 235), 1))
+        painter.drawText(left, 30, f"Box Plot ({points[0].unit})")
+        painter.drawText(left, 52, f"{min_value:.1f} to {max_value:.1f}")
+
+
+def _rect_roi_from_points(start: QPoint, end: QPoint) -> RectRoi:
+    left = min(start.x(), end.x())
+    top = min(start.y(), end.y())
+    width = abs(end.x() - start.x())
+    height = abs(end.y() - start.y())
+    return RectRoi(x=left, y=top, width=width, height=height)
 
 
 class MeasurerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Measurer")
+        self.resize(1280, 800)
+        self.setMinimumSize(980, 620)
         self.queue = ImageQueue()
 
         self.add_images_button = QPushButton("Add Images")
+        self.add_images_button.setObjectName("PrimaryButton")
         self.add_images_button.clicked.connect(self._choose_images)
         self.group_input = QLineEdit()
         self.group_input.setPlaceholderText("Group")
@@ -102,21 +430,47 @@ class MeasurerWindow(QMainWindow):
         self.clear_roi_button = QPushButton("Clear ROI")
         self.clear_roi_button.clicked.connect(self._clear_selected_roi)
         self.measure_current_button = QPushButton("Measure Current")
+        self.measure_current_button.setObjectName("PrimaryButton")
         self.measure_current_button.clicked.connect(self._measure_selected_image)
         self.export_button = QPushButton("Export")
         self.export_button.clicked.connect(self._export_measured_images)
         self.original_view_button = QPushButton("Original")
+        self.original_view_button.setCheckable(True)
         self.original_view_button.clicked.connect(self._show_original_view)
         self.result_view_button = QPushButton("Result")
+        self.result_view_button.setCheckable(True)
         self.result_view_button.clicked.connect(self._show_result_view)
         self.box_plot_view_button = QPushButton("Box Plot")
+        self.box_plot_view_button.setCheckable(True)
         self.box_plot_view_button.clicked.connect(self._show_box_plot_view)
         self.debug_view_button = QPushButton("Debug")
+        self.debug_view_button.setCheckable(True)
         self.debug_view_button.clicked.connect(self._show_debug_view)
         self.file_table = QTableWidget(0, 6)
+        self.file_table.setObjectName("FileQueue")
         self.file_table.setHorizontalHeaderLabels(
-            ["Select", "File", "Group", "ROI", "Measure", "Export"]
+            ["", "File", "Group", "Status", "Measure", "Export"]
         )
+        self.file_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.file_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Fixed
+        )
+        self.file_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.Fixed
+        )
+        self.file_table.setColumnHidden(0, True)
+        self.file_table.setColumnHidden(4, True)
+        self.file_table.setColumnHidden(5, True)
+        self.file_table.setColumnWidth(2, 92)
+        self.file_table.setColumnWidth(3, 190)
+        self.file_table.verticalHeader().hide()
+        self.file_table.setShowGrid(False)
+        self.file_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.file_table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.file_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -125,11 +479,24 @@ class MeasurerWindow(QMainWindow):
         )
         self.file_table.currentCellChanged.connect(self._select_image)
         self.status_label = QLabel("No images added.")
+        self.status_label.setObjectName("StatusTitle")
+        self.status_label.setWordWrap(True)
         self.result_values_label = QLabel("")
+        self.result_values_label.setObjectName("ResultValues")
+        self.result_values_label.setWordWrap(True)
         self.image_label = ImageCanvas(self.set_selected_roi)
         self.current_view_mode = "Original View"
+        self.box_plot_type_checkboxes: dict[str, QCheckBox] = {}
 
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(520)
         controls = QVBoxLayout()
+        controls.setContentsMargins(24, 24, 24, 24)
+        controls.setSpacing(12)
+        title = QLabel("Measurer")
+        title.setObjectName("Title")
+        controls.addWidget(title)
         controls.addWidget(self.add_images_button)
         controls.addWidget(self.group_input)
         controls.addWidget(self.set_group_button)
@@ -139,26 +506,59 @@ class MeasurerWindow(QMainWindow):
         controls.addWidget(self.measure_current_button)
         controls.addWidget(self.export_button)
         controls.addWidget(self.file_table)
-        controls.addWidget(self.status_label)
+        status_card = QFrame()
+        status_card.setObjectName("StatusCard")
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(12, 12, 12, 12)
+        status_layout.addWidget(self.status_label)
+        controls.addWidget(status_card)
+        sidebar.setLayout(controls)
 
         view_controls = QHBoxLayout()
+        view_controls.setSpacing(8)
         view_controls.addWidget(self.original_view_button)
         view_controls.addWidget(self.result_view_button)
         view_controls.addWidget(self.box_plot_view_button)
         view_controls.addWidget(self.debug_view_button)
+        view_controls.addStretch(1)
 
+        self.box_plot_filter_panel = QFrame()
+        self.box_plot_filter_panel.setObjectName("BoxPlotFilters")
+        box_plot_filter_layout = QHBoxLayout(self.box_plot_filter_panel)
+        box_plot_filter_layout.setContentsMargins(10, 8, 10, 8)
+        box_plot_filter_layout.setSpacing(12)
+        box_plot_filter_layout.addWidget(QLabel("Measurements"))
+        for measurement_type in MEASUREMENT_TYPE_ORDER:
+            checkbox = QCheckBox(measurement_type)
+            checkbox.setChecked(True)
+            checkbox.toggled.connect(self._refresh_box_plot_view_from_filters)
+            self.box_plot_type_checkboxes[measurement_type] = checkbox
+            box_plot_filter_layout.addWidget(checkbox)
+        box_plot_filter_layout.addStretch(1)
+        self.box_plot_filter_panel.setVisible(False)
+
+        workspace_frame = QFrame()
+        workspace_frame.setObjectName("PreviewArea")
         workspace = QVBoxLayout()
+        workspace.setContentsMargins(24, 24, 24, 24)
+        workspace.setSpacing(12)
         workspace.addLayout(view_controls)
+        workspace.addWidget(self.box_plot_filter_panel)
         workspace.addWidget(self.image_label)
         workspace.addWidget(self.result_values_label)
+        workspace_frame.setLayout(workspace)
 
         root_layout = QHBoxLayout()
-        root_layout.addLayout(controls, 1)
-        root_layout.addLayout(workspace, 3)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addWidget(sidebar)
+        root_layout.addWidget(workspace_frame, 1)
 
         root = QWidget()
         root.setLayout(root_layout)
         self.setCentralWidget(root)
+        self.setStyleSheet(_stylesheet())
+        self._sync_view_buttons()
 
     def add_image_paths(self, paths: list[str | Path]) -> AddImagesSummary:
         summary = self.queue.add_images(paths)
@@ -179,10 +579,14 @@ class MeasurerWindow(QMainWindow):
     ) -> None:
         if current_row < 0 or current_row >= len(self.queue.rows):
             return
-        self.image_label.setPixmap(_array_to_pixmap(self.queue.rows[current_row].image))
+        row = self.queue.rows[current_row]
+        self.image_label.setPixmap(_array_to_pixmap(row.image))
+        self.image_label.set_measurement_overlay(None, None)
+        self.image_label.set_roi(row.roi, visible=True)
         self.current_view_mode = "Original View"
         self.result_values_label.setText("")
         self._sync_scale_input(current_row)
+        self._sync_view_buttons()
 
     def set_selected_roi(self, x: int, y: int, width: int, height: int) -> bool:
         row_index = self.file_table.currentRow()
@@ -271,9 +675,12 @@ class MeasurerWindow(QMainWindow):
         self._refresh_file_table()
         self.file_table.setCurrentCell(row_index, 1)
         scale = self.queue.resolve_scale(row_index)
-        self.image_label.setPixmap(_result_to_pixmap(row.image, result, scale.nm_per_px))
+        self.image_label.setPixmap(_array_to_pixmap(row.image))
+        self.image_label.set_measurement_overlay(result, scale.nm_per_px)
+        self.image_label.set_roi(None, visible=False)
         self.result_values_label.setText(_format_result_values(result, scale.nm_per_px))
         self.current_view_mode = "Result View"
+        self._sync_view_buttons()
         self.status_label.setText("Measurement completed.")
 
     def _export_measured_images(self) -> None:
@@ -317,48 +724,76 @@ class MeasurerWindow(QMainWindow):
     def _show_original_view(self) -> None:
         row_index = self.file_table.currentRow()
         if row_index < 0 or row_index >= len(self.queue.rows):
+            self._sync_view_buttons()
             return
 
         self.image_label.setPixmap(_array_to_pixmap(self.queue.rows[row_index].image))
+        self.image_label.set_measurement_overlay(None, None)
+        self.image_label.set_roi(self.queue.rows[row_index].roi, visible=True)
         self.result_values_label.setText("")
         self.current_view_mode = "Original View"
+        self._sync_view_buttons()
 
     def _show_result_view(self) -> None:
         row_index = self.file_table.currentRow()
         if row_index < 0 or row_index >= len(self.queue.rows):
+            self._sync_view_buttons()
             return
 
         row = self.queue.rows[row_index]
         if not isinstance(row.measurement_results, MeasurementResult):
+            self._sync_view_buttons()
             return
 
         scale = self.queue.resolve_scale(row_index)
-        self.image_label.setPixmap(
-            _result_to_pixmap(row.image, row.measurement_results, scale.nm_per_px)
+        self.image_label.setPixmap(_array_to_pixmap(row.image))
+        self.image_label.set_measurement_overlay(
+            row.measurement_results, scale.nm_per_px
         )
+        self.image_label.set_roi(None, visible=False)
         self.result_values_label.setText(
             _format_result_values(row.measurement_results, scale.nm_per_px)
         )
         self.current_view_mode = "Result View"
+        self._sync_view_buttons()
 
     def _show_box_plot_view(self) -> None:
-        points, warning = _box_plot_points(self.queue)
-        self.image_label.setPixmap(_box_plot_to_pixmap(points, warning))
+        points, warning = _box_plot_points(
+            self.queue, self._selected_box_plot_measurement_types()
+        )
+        self.image_label.set_box_plot(points, warning)
         self.result_values_label.setText(_format_box_plot_summary(points, warning))
         self.current_view_mode = "Box Plot"
+        self._sync_view_buttons()
+
+    def _refresh_box_plot_view_from_filters(self, _checked: bool) -> None:
+        if self.current_view_mode == "Box Plot":
+            self._show_box_plot_view()
+
+    def _selected_box_plot_measurement_types(self) -> set[str]:
+        return {
+            measurement_type
+            for measurement_type, checkbox in self.box_plot_type_checkboxes.items()
+            if checkbox.isChecked()
+        }
 
     def _show_debug_view(self) -> None:
         row_index = self.file_table.currentRow()
         if row_index < 0 or row_index >= len(self.queue.rows):
+            self._sync_view_buttons()
             return
 
         row = self.queue.rows[row_index]
         if not isinstance(row.measurement_debug, MeasurementResult):
+            self._sync_view_buttons()
             return
 
         self.image_label.setPixmap(_debug_to_pixmap(row.image, row.measurement_debug))
+        self.image_label.set_measurement_overlay(None, None)
+        self.image_label.set_roi(row.roi, visible=True)
         self.result_values_label.setText(_format_debug_values(row.measurement_debug))
         self.current_view_mode = "Debug View"
+        self._sync_view_buttons()
 
     def _refresh_file_table(self) -> None:
         self.file_table.setRowCount(len(self.queue.rows))
@@ -375,6 +810,8 @@ class MeasurerWindow(QMainWindow):
                 self.file_table.setItem(
                     row_index, column_index, QTableWidgetItem(value)
                 )
+            self.file_table.setCellWidget(row_index, 3, _queue_status_widget(row))
+            self.file_table.setRowHeight(row_index, 54)
 
     def _selected_row_indexes(self) -> list[int]:
         selection_model = self.file_table.selectionModel()
@@ -393,9 +830,42 @@ class MeasurerWindow(QMainWindow):
         self.scale_input.setEnabled(row.metadata_nm_per_px is None)
         self.scale_error_label.setText(row.scale_error)
 
+    def _sync_view_buttons(self) -> None:
+        view_buttons = {
+            "Original View": self.original_view_button,
+            "Result View": self.result_view_button,
+            "Box Plot": self.box_plot_view_button,
+            "Debug View": self.debug_view_button,
+        }
+        for mode, button in view_buttons.items():
+            with QSignalBlocker(button):
+                button.setChecked(mode == self.current_view_mode)
+        self.box_plot_filter_panel.setVisible(self.current_view_mode == "Box Plot")
+
 
 def create_window() -> MeasurerWindow:
     return MeasurerWindow()
+
+
+def _queue_status_widget(row) -> QWidget:
+    widget = QWidget()
+    widget.setObjectName("QueueStatusCell")
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(6, 4, 6, 4)
+    layout.setSpacing(1)
+
+    primary = QLabel(f"{row.roi_status} · {row.measure_status}")
+    primary.setObjectName("QueueStatusPrimary")
+    primary.setToolTip(
+        f"ROI: {row.roi_status}\nMeasure: {row.measure_status}\nExport: {row.export_status}"
+    )
+    secondary = QLabel(row.export_status)
+    secondary.setObjectName("QueueStatusSecondary")
+    secondary.setToolTip(primary.toolTip())
+
+    layout.addWidget(primary)
+    layout.addWidget(secondary)
+    return widget
 
 
 def _roi_is_too_small(roi: RectRoi | None) -> bool:
@@ -411,53 +881,6 @@ def _array_to_pixmap(image: np.ndarray) -> QPixmap:
     qimage = QImage(
         display.data, width, height, bytes_per_line, QImage.Format.Format_Grayscale8
     ).copy()
-    return QPixmap.fromImage(qimage)
-
-
-def _result_to_pixmap(
-    image: np.ndarray, result: MeasurementResult, nm_per_px: float | None
-) -> QPixmap:
-    display = _normalize_to_uint8(image)
-    height, width = display.shape
-    rgb = np.ascontiguousarray(np.dstack([display, display, display]))
-    qimage = QImage(
-        rgb.data,
-        width,
-        height,
-        width * 3,
-        QImage.Format.Format_RGB888,
-    ).copy()
-    painter = QPainter(qimage)
-    unit = "px" if nm_per_px is None else "nm"
-    scale = 1.0 if nm_per_px is None else nm_per_px
-    placed_label_rects: list[QRect] = []
-    for measurement in result.measurements.values():
-        if measurement.status != "success":
-            continue
-        measurement_type = _measurement_type(measurement)
-        if measurement_type is None:
-            continue
-        color = MEASUREMENT_COLORS[measurement_type]
-        painter.setPen(QPen(color, 2))
-        painter.drawLine(
-            measurement.line.start.x,
-            measurement.line.start.y,
-            measurement.line.end.x,
-            measurement.line.end.y,
-        )
-        label = f"{measurement.value_px * scale:.1f} {unit}"
-        label_rect = _result_label_rect(
-            painter=painter,
-            text=label,
-            center_x=round((measurement.line.start.x + measurement.line.end.x) / 2),
-            center_y=round((measurement.line.start.y + measurement.line.end.y) / 2),
-            image_width=width,
-            image_height=height,
-            placed_rects=placed_label_rects,
-        )
-        placed_label_rects.append(label_rect)
-        _draw_outlined_text(painter, label_rect, label)
-    painter.end()
     return QPixmap.fromImage(qimage)
 
 
@@ -611,11 +1034,31 @@ def _format_result_values(
 ) -> str:
     unit = "px" if nm_per_px is None else "nm"
     scale = 1.0 if nm_per_px is None else nm_per_px
-    return " | ".join(
-        f"{name} {measurement.value_px * scale:.1f} {unit}"
-        for name, measurement in result.measurements.items()
-        if measurement.status == "success"
-    )
+    values_by_type: dict[str, list[float]] = {
+        measurement_type: [] for measurement_type in MEASUREMENT_TYPE_ORDER
+    }
+    for measurement in result.measurements.values():
+        if measurement.status != "success":
+            continue
+        measurement_type = _measurement_type(measurement)
+        if measurement_type is None:
+            continue
+        values_by_type[measurement_type].append(measurement.value_px * scale)
+
+    parts = []
+    for measurement_type in MEASUREMENT_TYPE_ORDER:
+        values = values_by_type[measurement_type]
+        if not values:
+            continue
+        minimum = min(values)
+        maximum = max(values)
+        value_label = (
+            f"{minimum:.1f}"
+            if minimum == maximum
+            else f"{minimum:.1f}-{maximum:.1f}"
+        )
+        parts.append(f"{measurement_type}: {value_label} {unit} (n={len(values)})")
+    return " | ".join(parts)
 
 
 def _format_overwrite_dialog_text(summary: OverwriteSummary) -> str:
@@ -644,7 +1087,12 @@ def _pluralize(count: int, singular: str) -> str:
     return singular if count == 1 else f"{singular}s"
 
 
-def _box_plot_points(queue: ImageQueue) -> tuple[list[BoxPlotPoint], str]:
+def _box_plot_points(
+    queue: ImageQueue, selected_measurement_types: set[str] | None = None
+) -> tuple[list[BoxPlotPoint], str]:
+    if selected_measurement_types is not None and not selected_measurement_types:
+        return [], "Box Plot: no selected measurement types."
+
     points: list[BoxPlotPoint] = []
     units: set[str] = set()
     for row_index, row in enumerate(queue.rows):
@@ -656,13 +1104,19 @@ def _box_plot_points(queue: ImageQueue) -> tuple[list[BoxPlotPoint], str]:
         scale_resolution = queue.resolve_scale(row_index)
         unit = "px" if scale_resolution.nm_per_px is None else "nm"
         scale = 1.0 if scale_resolution.nm_per_px is None else scale_resolution.nm_per_px
-        units.add(unit)
+        row_has_visible_measurement = False
         for measurement in row.measurement_results.measurements.values():
             if measurement.status != "success":
                 continue
             measurement_type = _measurement_type(measurement)
             if measurement_type is None:
                 continue
+            if (
+                selected_measurement_types is not None
+                and measurement_type not in selected_measurement_types
+            ):
+                continue
+            row_has_visible_measurement = True
             points.append(
                 BoxPlotPoint(
                     group=row.group,
@@ -671,6 +1125,8 @@ def _box_plot_points(queue: ImageQueue) -> tuple[list[BoxPlotPoint], str]:
                     unit=unit,
                 )
             )
+        if row_has_visible_measurement:
+            units.add(unit)
 
     if len(units) > 1:
         return points, "Box Plot cannot mix nm and px measurements."
@@ -705,73 +1161,6 @@ def _format_box_plot_summary(points: list[BoxPlotPoint], warning: str) -> str:
     )
 
 
-def _box_plot_to_pixmap(points: list[BoxPlotPoint], warning: str) -> QPixmap:
-    width = 720
-    height = 420
-    qimage = QImage(width, height, QImage.Format.Format_RGB888)
-    qimage.fill(QColor(18, 22, 28))
-    painter = QPainter(qimage)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-    if warning or not points:
-        painter.setPen(QPen(QColor(230, 235, 242), 1))
-        painter.drawText(32, 48, warning or "Box Plot: no measured data.")
-        painter.end()
-        return QPixmap.fromImage(qimage)
-
-    left = 56
-    top = 40
-    right = width - 32
-    bottom = height - 72
-    values = [point.value for point in points]
-    min_value = min(values)
-    max_value = max(values)
-    if min_value == max_value:
-        min_value -= 1
-        max_value += 1
-
-    painter.setPen(QPen(QColor(94, 104, 118), 1))
-    painter.drawLine(left, bottom, right, bottom)
-    painter.drawLine(left, top, left, bottom)
-
-    buckets = _box_plot_buckets(points)
-    bucket_count = len(buckets)
-    bucket_width = (right - left) / max(1, bucket_count)
-    for bucket_index, ((group, measurement_type), bucket_values) in enumerate(buckets):
-        center_x = round(left + bucket_width * (bucket_index + 0.5))
-        color = MEASUREMENT_COLORS[measurement_type]
-        sorted_values = sorted(bucket_values)
-        low = sorted_values[0]
-        high = sorted_values[-1]
-        q1 = _percentile(sorted_values, 25)
-        median = _percentile(sorted_values, 50)
-        q3 = _percentile(sorted_values, 75)
-        low_y = _box_plot_y(low, min_value, max_value, top, bottom)
-        high_y = _box_plot_y(high, min_value, max_value, top, bottom)
-        q1_y = _box_plot_y(q1, min_value, max_value, top, bottom)
-        median_y = _box_plot_y(median, min_value, max_value, top, bottom)
-        q3_y = _box_plot_y(q3, min_value, max_value, top, bottom)
-
-        painter.setPen(QPen(color, 2))
-        painter.drawLine(center_x, high_y, center_x, low_y)
-        painter.drawRect(center_x - 14, q3_y, 28, max(2, q1_y - q3_y))
-        painter.drawLine(center_x - 16, median_y, center_x + 16, median_y)
-        for point_index, value in enumerate(bucket_values):
-            jitter = ((point_index % 5) - 2) * 4
-            y = _box_plot_y(value, min_value, max_value, top, bottom)
-            painter.drawEllipse(center_x + jitter - 2, y - 2, 4, 4)
-
-        painter.setPen(QPen(QColor(220, 226, 235), 1))
-        painter.drawText(center_x - 36, bottom + 20, group[:12])
-        painter.drawText(center_x - 36, bottom + 38, measurement_type[:16])
-
-    painter.setPen(QPen(QColor(220, 226, 235), 1))
-    painter.drawText(left, 24, f"Box Plot ({points[0].unit})")
-    painter.drawText(left, bottom + 58, f"{min_value:.1f} to {max_value:.1f}")
-    painter.end()
-    return QPixmap.fromImage(qimage)
-
-
 def _box_plot_buckets(
     points: list[BoxPlotPoint],
 ) -> list[tuple[tuple[str, str], list[float]]]:
@@ -781,10 +1170,29 @@ def _box_plot_buckets(
     return sorted(
         grouped.items(),
         key=lambda item: (
-            item[0][0],
             MEASUREMENT_TYPE_ORDER.index(item[0][1]),
+            item[0][0],
         ),
     )
+
+
+def _box_plot_label_clusters(
+    buckets: list[tuple[tuple[str, str], list[float]]],
+) -> list[tuple[str, int, int]]:
+    clusters: list[tuple[str, int, int]] = []
+    if not buckets:
+        return clusters
+
+    current_type = buckets[0][0][1]
+    start_index = 0
+    for index, ((_group, measurement_type), _values) in enumerate(buckets[1:], start=1):
+        if measurement_type == current_type:
+            continue
+        clusters.append((current_type, start_index, index - 1))
+        current_type = measurement_type
+        start_index = index
+    clusters.append((current_type, start_index, len(buckets) - 1))
+    return clusters
 
 
 def _box_plot_y(
@@ -792,6 +1200,12 @@ def _box_plot_y(
 ) -> int:
     fraction = (value - min_value) / (max_value - min_value)
     return round(bottom - fraction * (bottom - top))
+
+
+def _elided_center_label(metrics, text: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    return metrics.elidedText(text, Qt.TextElideMode.ElideRight, max_width)
 
 
 def _percentile(sorted_values: list[float], percentile: float) -> float:
@@ -853,6 +1267,155 @@ def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
         return np.zeros(image.shape, dtype=np.uint8)
     scaled = np.asarray(image, dtype=np.float32) / max_value * 255
     return np.ascontiguousarray(np.rint(scaled).astype(np.uint8))
+
+
+def _stylesheet() -> str:
+    return """
+    QMainWindow {
+        background: #111214;
+        color: #f2f3f5;
+        font-family: "Segoe UI", "SF Pro Text", Arial, sans-serif;
+        font-size: 13px;
+    }
+
+    #Sidebar {
+        background: #181a1f;
+        border-right: 1px solid #2c3038;
+    }
+
+    #PreviewArea {
+        background: #101114;
+    }
+
+    #Title {
+        color: #f6f7f9;
+        font-size: 24px;
+        font-weight: 600;
+    }
+
+    #ImageCanvas {
+        border: 1px solid #2c3038;
+        border-radius: 8px;
+        background: #15171b;
+        color: #aeb4be;
+    }
+
+    #StatusCard {
+        border: 1px solid #303641;
+        border-radius: 8px;
+        background: #12151a;
+    }
+
+    #StatusTitle {
+        color: #f2f4f8;
+        font-size: 15px;
+        font-weight: 650;
+    }
+
+    #ResultValues {
+        color: #c9d0db;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 4px 2px;
+    }
+
+    #BoxPlotFilters {
+        border: 1px solid #303641;
+        border-radius: 8px;
+        background: #12151a;
+    }
+
+    QLabel {
+        color: #c9d0db;
+    }
+
+    QCheckBox {
+        color: #d8dde6;
+        spacing: 6px;
+    }
+
+    QCheckBox::indicator {
+        width: 14px;
+        height: 14px;
+    }
+
+    QLineEdit {
+        min-height: 34px;
+        padding: 6px 10px;
+        border: 1px solid #3a3f49;
+        border-radius: 8px;
+        background: #111318;
+        color: #eef1f5;
+        selection-background-color: #2f80ed;
+    }
+
+    QLineEdit:focus {
+        border-color: #2f80ed;
+    }
+
+    QPushButton {
+        min-height: 32px;
+        padding: 6px 12px;
+        border: 1px solid #3a3f49;
+        border-radius: 8px;
+        background: #23262d;
+        color: #eef1f5;
+    }
+
+    QPushButton:hover {
+        border-color: #596170;
+        background: #2a2e36;
+    }
+
+    QPushButton:checked {
+        border-color: #2f80ed;
+        color: #ffffff;
+        background: #1d3f6e;
+    }
+
+    QPushButton:disabled {
+        border-color: #2b2f36;
+        background: #1b1d22;
+        color: #737b87;
+    }
+
+    #PrimaryButton {
+        border: none;
+        background: #2f80ed;
+        color: #ffffff;
+        font-weight: 600;
+    }
+
+    #PrimaryButton:hover {
+        background: #4a90f3;
+    }
+
+    #FileQueue {
+        border: 1px solid #2c3038;
+        border-radius: 8px;
+        background: #111318;
+        color: #e4e7ec;
+        gridline-color: transparent;
+        selection-background-color: #1d3f6e;
+        selection-color: #ffffff;
+        font-size: 12px;
+    }
+
+    #FileQueue::item {
+        padding: 4px;
+        border-bottom: 1px solid #20242b;
+    }
+
+    QHeaderView::section {
+        border: none;
+        border-bottom: 1px solid #303641;
+        padding: 6px 4px;
+        background: #151820;
+        color: #aeb4be;
+        font-size: 12px;
+        font-weight: 650;
+    }
+    """
 
 
 def main() -> int:
