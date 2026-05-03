@@ -317,10 +317,9 @@ def test_export_summary_separates_units_and_uses_current_scale(tmp_path):
         )
     )
     queue = ImageQueue()
-    queue.add_image_data(first_path, image)
+    queue.add_image_data(first_path, image, metadata_nm_per_px=0.5)
     queue.add_image_data(second_path, image)
     queue.set_group([0, 1], "Process A")
-    queue.set_manual_scale(0, "0.5")
     queue.record_measurement_result(0, measure_image(image, roi=None))
     queue.record_measurement_result(1, measure_image(image, roi=None))
 

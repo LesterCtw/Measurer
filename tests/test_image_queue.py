@@ -126,7 +126,9 @@ def test_dm3_without_metadata_allows_manual_scale_after_px_fallback(
 
     assert queue.resolve_scale(0) == ScaleResolution(source="px", nm_per_px=None)
     assert queue.set_manual_scale(0, "0.5") is True
-    assert queue.resolve_scale(0) == ScaleResolution(source="manual", nm_per_px=0.5)
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.5
+    )
 
 
 def test_add_images_accepts_valid_2d_tiff(tmp_path):
@@ -271,25 +273,74 @@ def test_manual_scale_accepts_blank_positive_values_and_preserves_valid_state(
     tmp_path,
 ):
     image_path = tmp_path / "manual_scale.tif"
+    second_path = tmp_path / "second_manual_scale.tif"
     image = np.ones((4, 4), dtype=np.uint8)
 
     queue = ImageQueue()
     queue.add_image_data(image_path, image)
+    queue.add_image_data(second_path, image)
 
     assert queue.resolve_scale(0) == ScaleResolution(source="px", nm_per_px=None)
     assert queue.set_manual_scale(0, "0.25") is True
-    assert queue.resolve_scale(0) == ScaleResolution(source="manual", nm_per_px=0.25)
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
+    assert queue.resolve_scale(1) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
 
     assert queue.set_manual_scale(0, "0") is False
-    assert queue.resolve_scale(0) == ScaleResolution(source="manual", nm_per_px=0.25)
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
     assert queue.rows[0].scale_error == "Enter a positive nm / pixel value."
 
     assert queue.set_manual_scale(0, "not numeric") is False
-    assert queue.resolve_scale(0) == ScaleResolution(source="manual", nm_per_px=0.25)
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
 
     assert queue.set_manual_scale(0, "   ") is True
-    assert queue.resolve_scale(0) == ScaleResolution(source="px", nm_per_px=None)
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
     assert queue.rows[0].scale_error == ""
+
+
+def test_manual_scale_uses_default_until_single_image_override(tmp_path):
+    first_path = tmp_path / "first.tif"
+    second_path = tmp_path / "second.tif"
+    metadata_path = tmp_path / "metadata.tif"
+    image = np.ones((4, 4), dtype=np.uint8)
+
+    queue = ImageQueue()
+    queue.add_image_data(first_path, image)
+    queue.add_image_data(second_path, image)
+    queue.add_image_data(metadata_path, image, metadata_nm_per_px=0.8)
+
+    assert queue.set_manual_scale(0, "0.25") is True
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
+    assert queue.resolve_scale(1) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
+    assert queue.resolve_scale(2) == ScaleResolution(
+        source="metadata", nm_per_px=0.8
+    )
+
+    assert queue.set_manual_scale(1, "0.5") is True
+    assert queue.resolve_scale(0) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
+    assert queue.resolve_scale(1) == ScaleResolution(
+        source="manual_override", nm_per_px=0.5
+    )
+
+    assert queue.set_manual_scale(1, "   ") is True
+    assert queue.resolve_scale(1) == ScaleResolution(
+        source="manual_default", nm_per_px=0.25
+    )
 
 
 def test_roi_is_clamped_and_clears_stale_measurement_state(tmp_path):

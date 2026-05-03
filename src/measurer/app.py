@@ -601,12 +601,16 @@ class MeasurerWindow(QMainWindow):
         if current_row < 0 or current_row >= len(self.queue.rows):
             return
         row = self.queue.rows[current_row]
+        self._sync_scale_input(current_row)
+        if isinstance(row.measurement_results, MeasurementResult):
+            self._show_result_view()
+            return
+
         self.image_label.setPixmap(_array_to_pixmap(row.image))
         self.image_label.set_measurement_overlay(None, None)
         self.image_label.set_roi(row.roi, visible=True)
         self.current_view_mode = "Original View"
         self.result_values_label.setText("")
-        self._sync_scale_input(current_row)
         self._sync_view_buttons()
 
     def set_selected_roi(self, x: int, y: int, width: int, height: int) -> bool:

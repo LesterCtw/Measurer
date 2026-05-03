@@ -112,6 +112,33 @@ def test_app_shows_selected_image_in_original_preview(qapp, tmp_path):
     assert selected_size.height() == 9
 
 
+def test_app_returns_to_result_view_for_already_measured_image(qapp, tmp_path):
+    first_path = tmp_path / "first_measured.tif"
+    second_path = tmp_path / "second_pending.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(first_path, image)
+    tifffile.imwrite(second_path, np.ones((128, 128), dtype=np.uint8) * 20)
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.measure_current_button.click()
+    window.file_table.setCurrentCell(1, 1)
+    window.file_table.setCurrentCell(0, 1)
+
+    assert window.current_view_mode == "Result View"
+    assert "TCD: 32.0 px (n=1)" in window.result_values_label.text()
+
+
 def test_original_preview_size_hint_does_not_follow_large_image(qapp, tmp_path):
     image_path = tmp_path / "large_preview.tif"
     tifffile.imwrite(image_path, np.ones((1800, 2400), dtype=np.uint8))
@@ -345,12 +372,20 @@ def test_app_applies_group_and_manual_scale_to_selected_rows(qapp, tmp_path):
     window.file_table.setCurrentCell(0, 1)
     window.scale_input.setText("0.25")
     window.scale_input.editingFinished.emit()
-    assert window.queue.resolve_scale(0).source == "manual"
+    assert window.queue.resolve_scale(0).source == "manual_default"
     assert window.queue.resolve_scale(0).nm_per_px == 0.25
+    assert window.queue.resolve_scale(1).source == "manual_default"
+    assert window.queue.resolve_scale(1).nm_per_px == 0.25
+
+    window.file_table.setCurrentCell(1, 1)
+    window.scale_input.setText("0.5")
+    window.scale_input.editingFinished.emit()
+    assert window.queue.resolve_scale(1).source == "manual_override"
+    assert window.queue.resolve_scale(1).nm_per_px == 0.5
 
     window.scale_input.setText("-1")
     window.scale_input.editingFinished.emit()
-    assert window.queue.resolve_scale(0).nm_per_px == 0.25
+    assert window.queue.resolve_scale(1).nm_per_px == 0.5
     assert "positive" in window.scale_error_label.text()
 
 
@@ -813,10 +848,11 @@ def test_app_box_plot_warns_instead_of_drawing_mixed_units(qapp, tmp_path):
     tifffile.imwrite(second_path, image)
     window = create_window()
 
-    window.add_image_paths([first_path, second_path])
+    window.queue.add_image_data(first_path, image, metadata_nm_per_px=0.5)
+    window.queue.add_image_data(second_path, image)
+    window._refresh_file_table()
     window.file_table.setCurrentCell(0, 1)
-    window.scale_input.setText("0.5")
-    window.scale_input.editingFinished.emit()
+    window._select_image(0)
     window.measure_current_button.click()
     window.file_table.setCurrentCell(1, 1)
     window.measure_current_button.click()
