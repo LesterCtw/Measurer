@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics，以及多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish，以及 GUI Box Plot preview。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -49,6 +49,12 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - Height 使用 Refined Boundary 內的最大 vertical chord length。
 - 成功 Measure Current 後，該圖 Measure 變成 `Measured`，Export 維持 `Not exported`，workspace 切到 Result View。
 - Result View 會顯示原圖加上成功的 TCD / BCD / Height / Horizontal Space / Vertical Space Measurement Lines 與一位小數值，不顯示 ROI 或 debug internals。
+- Result View 使用固定 measurement type 顏色：TCD cyan、BCD orange、Height yellow、Horizontal Space magenta、Vertical Space lime。
+- Result View 數值文字顯示在線段中心附近，使用白字加 dark outline，會 clamp 在 image bounds 內，並用固定上下偏移減少局部碰撞；若仍重疊，不讓 rendering failed。
+- manual scale 改變後，Result View 會用現有 px geometry 重新換算顯示值與單位，不需要重測。
+- Box Plot preview 已可從 GUI 切換，會依 Group 與 measurement type 彙整 successful final measurements，顯示 raw points with jitter 與 summary/status panel。
+- Group 或 manual scale 改變後，Box Plot preview 會重新聚合現有 measurement results，不需要重測。
+- Box Plot preview 不混合 nm 與 px；同時存在 nm 與 px measurement results 時，顯示 warning 而不畫 mixed-unit plot。
 - Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、rejected Space pair count、refined points、fallback points、fallback ratio。
 - file queue row 預設顯示：
   - Group = `Default`
@@ -56,7 +62,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
   - Measure = `Pending`
   - Export = `Not exported`
 
-目前尚未實作 Box Plot、完整 Debug Image / export-grade diagnostics、Export、`.dm3` input、metadata scale parser，以及真實 STEM ZC 樣本 validation。
+目前尚未實作完整 Debug Image / export-grade diagnostics、Export、`.dm3` input、metadata scale parser、Excel 內嵌 box plot，以及真實 STEM ZC 樣本 validation。
 
 ## 開發指令
 
@@ -933,13 +939,23 @@ Debug 可包含：
 
 ## Box Plot
 
-GUI 需要 box plot preview。Excel MVS 暫不內嵌 box plot 圖片。
+GUI Box Plot preview 已有 MVS 版本。Excel MVS 暫不內嵌 box plot 圖片。
 
-Box plot 以 group 分組。
+Box Plot 目前從 app state 中的 successful final measurements 產生，不重新執行 Measure Current。它使用每張圖片當下的 Group 與 scale resolution，把 px geometry 轉成目前顯示單位後再聚合。
 
-Group filter：
+目前行為：
 
-- 使用 checkbox / chips 選擇要顯示哪些 group。
+- 依 Group 與 measurement type 彙整。
+- 顯示 TCD、BCD、Height、Horizontal Space、Vertical Space 中目前有 successful final measurements 的項目。
+- 顯示 raw points with jitter。
+- 顯示 summary/status panel，包含 measurement count、unit、Groups、measurement types，或 empty/mixed-unit warning。
+- Group 改變後會直接刷新，不需要重測。
+- manual scale 改變後會直接刷新，不需要重測。
+- 如果同一個 Box Plot preview 會混合 nm 與 px，顯示 warning，不畫 mixed-unit plot。
+
+Group filter 尚未實作：
+
+- 未來可用 checkbox / chips 選擇要顯示哪些 group。
 - Default 是一般 group，預設顯示。
 - 可勾選 / 取消任何 group。
 

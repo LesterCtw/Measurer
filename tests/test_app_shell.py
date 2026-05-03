@@ -1,6 +1,7 @@
 import numpy as np
 import tifffile
 from PySide6.QtCore import QItemSelectionModel
+from PySide6.QtGui import QColor
 
 from measurer.app import create_window
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
@@ -177,6 +178,211 @@ def test_app_result_view_shows_multiple_metal_islands_and_space_measurements(
     assert "M001-M002 Horizontal Space 44.0 px" in window.result_values_label.text()
 
 
+def test_app_result_view_draws_measurement_type_colors(qapp, tmp_path):
+    image_path = tmp_path / "result_colors.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=240,
+            image_height=220,
+            center_x=60,
+            top_y=24,
+            height=50,
+            tcd=30,
+            bcd=40,
+        )
+    )
+    for center_x, top_y in [(150, 24), (60, 120), (150, 120)]:
+        island_image = create_single_metal_island_image(
+            SingleMetalIslandSpec(
+                image_width=240,
+                image_height=220,
+                center_x=center_x,
+                top_y=top_y,
+                height=50,
+                tcd=30,
+                bcd=40,
+            )
+        )
+        image[island_image == 220] = 220
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+
+    assert "Horizontal Space" in window.result_values_label.text()
+    assert "Vertical Space" in window.result_values_label.text()
+    result_image = window.image_label.pixmap().toImage()
+    expected_colors = [
+        QColor(64, 196, 255),
+        QColor(255, 183, 77),
+        QColor(255, 210, 64),
+        QColor(186, 104, 200),
+        QColor(129, 199, 132),
+    ]
+    for color in expected_colors:
+        assert _image_contains_color(result_image, color)
+
+
+def test_app_result_view_refreshes_values_when_manual_scale_changes(qapp, tmp_path):
+    image_path = tmp_path / "scaled_result.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    assert "TCD 32.0 px" in window.result_values_label.text()
+
+    window.scale_input.setText("0.5")
+    window.scale_input.editingFinished.emit()
+
+    assert window.current_view_mode == "Result View"
+    assert window.file_table.item(0, 4).text() == "Measured"
+    assert "TCD 16.0 nm" in window.result_values_label.text()
+    assert "BCD 24.0 nm" in window.result_values_label.text()
+    assert "Height 30.0 nm" in window.result_values_label.text()
+
+
+def test_app_box_plot_preview_summarizes_measured_results_by_group(qapp, tmp_path):
+    image_path = tmp_path / "box_plot_source.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.group_input.setText("Process A")
+    window.set_group_button.click()
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+
+    assert window.current_view_mode == "Box Plot"
+    assert window.image_label.pixmap() is not None
+    assert not window.image_label.pixmap().isNull()
+    assert "Box Plot" in window.result_values_label.text()
+    assert "Process A" in window.result_values_label.text()
+    assert "TCD" in window.result_values_label.text()
+    assert "BCD" in window.result_values_label.text()
+    assert "Height" in window.result_values_label.text()
+    assert "3 measurements" in window.result_values_label.text()
+    assert "px" in window.result_values_label.text()
+
+
+def test_app_box_plot_refreshes_when_group_changes_without_remeasure(qapp, tmp_path):
+    image_path = tmp_path / "box_plot_group_refresh.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.group_input.setText("Process A")
+    window.set_group_button.click()
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+    assert "Process A" in window.result_values_label.text()
+
+    window.group_input.setText("Process B")
+    window.set_group_button.click()
+
+    assert window.current_view_mode == "Box Plot"
+    assert "Process B" in window.result_values_label.text()
+    assert "Process A" not in window.result_values_label.text()
+    assert window.file_table.item(0, 4).text() == "Measured"
+
+
+def test_app_box_plot_refreshes_when_manual_scale_changes_without_remeasure(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "box_plot_scale_refresh.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+    assert "Unit: px" in window.result_values_label.text()
+
+    window.scale_input.setText("0.5")
+    window.scale_input.editingFinished.emit()
+
+    assert window.current_view_mode == "Box Plot"
+    assert "Unit: nm" in window.result_values_label.text()
+    assert "3 measurements" in window.result_values_label.text()
+    assert window.file_table.item(0, 4).text() == "Measured"
+
+
+def test_app_box_plot_warns_instead_of_drawing_mixed_units(qapp, tmp_path):
+    first_path = tmp_path / "box_plot_nm.tif"
+    second_path = tmp_path / "box_plot_px.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(first_path, image)
+    tifffile.imwrite(second_path, image)
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.file_table.setCurrentCell(0, 1)
+    window.scale_input.setText("0.5")
+    window.scale_input.editingFinished.emit()
+    window.measure_current_button.click()
+    window.file_table.setCurrentCell(1, 1)
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+
+    assert window.current_view_mode == "Box Plot"
+    assert "cannot mix nm and px" in window.result_values_label.text()
+
+
 def test_app_failed_measure_current_stays_on_original_view_with_reason(
     qapp, tmp_path
 ):
@@ -275,3 +481,16 @@ def test_app_debug_view_shows_boundary_touch_diagnostics_after_failure(
     assert window.current_view_mode == "Debug View"
     assert "Kept candidates: 0" in window.result_values_label.text()
     assert "Excluded boundary-touch components: 1" in window.result_values_label.text()
+
+
+def _image_contains_color(image, expected_color: QColor) -> bool:
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if (
+                color.red() == expected_color.red()
+                and color.green() == expected_color.green()
+                and color.blue() == expected_color.blue()
+            ):
+                return True
+    return False
