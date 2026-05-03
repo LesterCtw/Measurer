@@ -534,6 +534,59 @@ def test_measure_horizontal_space_between_same_row_adjacent_metal_islands():
     assert result.measurements["M001-M002 Horizontal Space"].value_px == pytest.approx(44)
 
 
+def test_non_contiguous_roi_union_can_measure_horizontal_space_across_shapes():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=300,
+            image_height=140,
+            center_x=60,
+            top_y=32,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    unselected_middle_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=300,
+            image_height=140,
+            center_x=140,
+            top_y=32,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    right_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=300,
+            image_height=140,
+            center_x=220,
+            top_y=32,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    image = image.copy()
+    image[unselected_middle_image == 220] = 220
+    image[right_image == 220] = 220
+
+    result = measure_image(
+        image,
+        roi=RoiSelection(
+            (
+                RectRoi(x=20, y=20, width=80, height=90),
+                RectRoi(x=180, y=20, width=80, height=90),
+            )
+        ),
+    )
+
+    assert result.status == "success"
+    assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
+    assert "M001-M002 Horizontal Space" in result.measurements
+
+
 def test_horizontal_space_line_uses_refined_bbox_gap_between_tcd_lines():
     image = np.full((140, 260), 20, dtype=np.uint8)
     image[20:42, 45:81] = 220
@@ -610,6 +663,59 @@ def test_measure_vertical_space_between_same_column_adjacent_metal_islands():
 
     assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
     assert result.measurements["M001-M002 Vertical Space"].value_px == pytest.approx(30)
+
+
+def test_non_contiguous_roi_union_can_measure_vertical_space_across_shapes():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=260,
+            center_x=90,
+            top_y=24,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    unselected_middle_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=260,
+            center_x=90,
+            top_y=104,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    lower_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=260,
+            center_x=90,
+            top_y=184,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[unselected_middle_image == 220] = 220
+    image[lower_image == 220] = 220
+
+    result = measure_image(
+        image,
+        roi=RoiSelection(
+            (
+                RectRoi(x=50, y=10, width=80, height=80),
+                RectRoi(x=50, y=170, width=80, height=80),
+            )
+        ),
+    )
+
+    assert result.status == "success"
+    assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
+    assert "M001-M002 Vertical Space" in result.measurements
 
 
 def test_vertical_space_line_stays_inside_lk_gap():

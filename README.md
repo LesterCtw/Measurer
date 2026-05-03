@@ -203,6 +203,7 @@ Synthetic image generator 需要產生：
 - 驗證 touching-boundary exclusion。
 - 驗證 refined boundary pipeline 不會破壞基本幾何。
 - 驗證 TCD / BCD / Height / Horizontal Space / Vertical Space 的 final measurement logic。
+- 驗證不相連 ROI Shapes 仍作為單一 ROI Union 產生 Horizontal Space / Vertical Space。
 - 驗證 Excel Summary / Measurements / Trace Sheet 的資料一致性。
 
 限制：
