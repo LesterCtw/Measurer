@@ -405,7 +405,42 @@ def test_measure_vertical_space_between_same_column_adjacent_metal_islands():
     result = measure_image(image, roi=None)
 
     assert [metal.id for metal in result.metal_islands] == ["M001", "M002"]
-    assert result.measurements["M001-M002 Vertical Space"].value_px == pytest.approx(31)
+    assert result.measurements["M001-M002 Vertical Space"].value_px == pytest.approx(30)
+
+
+def test_vertical_space_line_stays_inside_lk_gap():
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=180,
+            center_x=90,
+            top_y=20,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    lower_image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=180,
+            image_height=180,
+            center_x=90,
+            top_y=100,
+            height=50,
+            tcd=32,
+            bcd=42,
+        )
+    )
+    image = image.copy()
+    image[lower_image == 220] = 220
+
+    result = measure_image(image, roi=None)
+
+    line = result.measurements["M001-M002 Vertical Space"].line
+    assert line.start == Point(x=90, y=70)
+    assert line.end == Point(x=90, y=99)
+    assert image[line.start.y, line.start.x] == 20
+    assert image[line.end.y, line.end.x] == 20
 
 
 def test_invalid_overlap_pair_is_omitted_without_failing_image():

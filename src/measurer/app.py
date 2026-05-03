@@ -449,7 +449,7 @@ class MeasurerWindow(QMainWindow):
         self.file_table = QTableWidget(0, 6)
         self.file_table.setObjectName("FileQueue")
         self.file_table.setHorizontalHeaderLabels(
-            ["", "File", "Group", "Status", "Measure", "Export"]
+            ["", "Image", "Group", "Status", "Measure", "Export"]
         )
         self.file_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
@@ -461,6 +461,8 @@ class MeasurerWindow(QMainWindow):
             3, QHeaderView.ResizeMode.Fixed
         )
         self.file_table.setColumnHidden(0, True)
+        self.file_table.setColumnHidden(2, True)
+        self.file_table.setColumnHidden(3, True)
         self.file_table.setColumnHidden(4, True)
         self.file_table.setColumnHidden(5, True)
         self.file_table.setColumnWidth(2, 92)
@@ -475,7 +477,10 @@ class MeasurerWindow(QMainWindow):
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.file_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.MultiSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.file_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
         )
         self.file_table.currentCellChanged.connect(self._select_image)
         self.status_label = QLabel("No images added.")
@@ -487,6 +492,9 @@ class MeasurerWindow(QMainWindow):
         self.image_label = ImageCanvas(self.set_selected_roi)
         self.current_view_mode = "Original View"
         self.box_plot_type_checkboxes: dict[str, QCheckBox] = {}
+        self.box_plot_select_all_checkbox = QCheckBox("All")
+        self.group_controls_panel = QFrame()
+        self.group_controls_panel.setObjectName("GroupControls")
 
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
@@ -498,13 +506,17 @@ class MeasurerWindow(QMainWindow):
         title.setObjectName("Title")
         controls.addWidget(title)
         controls.addWidget(self.add_images_button)
-        controls.addWidget(self.group_input)
-        controls.addWidget(self.set_group_button)
         controls.addWidget(self.scale_input)
         controls.addWidget(self.scale_error_label)
         controls.addWidget(self.clear_roi_button)
         controls.addWidget(self.measure_current_button)
         controls.addWidget(self.export_button)
+        group_controls = QHBoxLayout(self.group_controls_panel)
+        group_controls.setContentsMargins(0, 0, 0, 0)
+        group_controls.setSpacing(8)
+        group_controls.addWidget(self.group_input, 1)
+        group_controls.addWidget(self.set_group_button)
+        controls.addWidget(self.group_controls_panel)
         controls.addWidget(self.file_table)
         status_card = QFrame()
         status_card.setObjectName("StatusCard")
@@ -525,13 +537,22 @@ class MeasurerWindow(QMainWindow):
         self.box_plot_filter_panel = QFrame()
         self.box_plot_filter_panel.setObjectName("BoxPlotFilters")
         box_plot_filter_layout = QHBoxLayout(self.box_plot_filter_panel)
-        box_plot_filter_layout.setContentsMargins(10, 8, 10, 8)
-        box_plot_filter_layout.setSpacing(12)
-        box_plot_filter_layout.addWidget(QLabel("Measurements"))
+        box_plot_filter_layout.setContentsMargins(14, 8, 14, 8)
+        box_plot_filter_layout.setSpacing(18)
+        box_plot_label = QLabel("Measurements")
+        box_plot_label.setObjectName("BoxPlotFilterLabel")
+        box_plot_filter_layout.addWidget(box_plot_label)
+        self.box_plot_select_all_checkbox.setChecked(True)
+        self.box_plot_select_all_checkbox.setObjectName("BoxPlotFilterCheckbox")
+        self.box_plot_select_all_checkbox.toggled.connect(
+            self._set_all_box_plot_measurement_types
+        )
+        box_plot_filter_layout.addWidget(self.box_plot_select_all_checkbox)
         for measurement_type in MEASUREMENT_TYPE_ORDER:
             checkbox = QCheckBox(measurement_type)
+            checkbox.setObjectName("BoxPlotFilterCheckbox")
             checkbox.setChecked(True)
-            checkbox.toggled.connect(self._refresh_box_plot_view_from_filters)
+            checkbox.toggled.connect(self._box_plot_type_filter_toggled)
             self.box_plot_type_checkboxes[measurement_type] = checkbox
             box_plot_filter_layout.addWidget(checkbox)
         box_plot_filter_layout.addStretch(1)
@@ -766,7 +787,22 @@ class MeasurerWindow(QMainWindow):
         self.current_view_mode = "Box Plot"
         self._sync_view_buttons()
 
-    def _refresh_box_plot_view_from_filters(self, _checked: bool) -> None:
+    def _set_all_box_plot_measurement_types(self, checked: bool) -> None:
+        for checkbox in self.box_plot_type_checkboxes.values():
+            with QSignalBlocker(checkbox):
+                checkbox.setChecked(checked)
+        self._refresh_box_plot_view_from_filters()
+
+    def _box_plot_type_filter_toggled(self, _checked: bool) -> None:
+        all_checked = all(
+            checkbox.isChecked()
+            for checkbox in self.box_plot_type_checkboxes.values()
+        )
+        with QSignalBlocker(self.box_plot_select_all_checkbox):
+            self.box_plot_select_all_checkbox.setChecked(all_checked)
+        self._refresh_box_plot_view_from_filters()
+
+    def _refresh_box_plot_view_from_filters(self) -> None:
         if self.current_view_mode == "Box Plot":
             self._show_box_plot_view()
 
@@ -800,18 +836,18 @@ class MeasurerWindow(QMainWindow):
         for row_index, row in enumerate(self.queue.rows):
             values = [
                 "",
-                row.file_name,
+                "",
                 row.group,
-                row.roi_status,
+                "",
                 row.measure_status,
                 row.export_status,
             ]
             for column_index, value in enumerate(values):
-                self.file_table.setItem(
-                    row_index, column_index, QTableWidgetItem(value)
-                )
-            self.file_table.setCellWidget(row_index, 3, _queue_status_widget(row))
-            self.file_table.setRowHeight(row_index, 54)
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.file_table.setItem(row_index, column_index, item)
+            self.file_table.setCellWidget(row_index, 1, _queue_image_widget(row))
+            self.file_table.setRowHeight(row_index, 78)
 
     def _selected_row_indexes(self) -> list[int]:
         selection_model = self.file_table.selectionModel()
@@ -847,13 +883,40 @@ def create_window() -> MeasurerWindow:
     return MeasurerWindow()
 
 
-def _queue_status_widget(row) -> QWidget:
+def _queue_image_widget(row) -> QWidget:
     widget = QWidget()
-    widget.setObjectName("QueueStatusCell")
+    widget.setObjectName("QueueImageCell")
     layout = QVBoxLayout(widget)
-    layout.setContentsMargins(6, 4, 6, 4)
-    layout.setSpacing(1)
+    layout.setContentsMargins(8, 6, 8, 6)
+    layout.setSpacing(5)
 
+    file_row = QHBoxLayout()
+    file_row.setContentsMargins(0, 0, 0, 0)
+    file_row.setSpacing(8)
+
+    file_name = QLabel(row.file_name)
+    file_name.setObjectName("QueueFileName")
+    file_name.setToolTip(row.file_name)
+    file_name.setWordWrap(False)
+
+    group = QLabel(row.group)
+    group.setObjectName("QueueGroupBadge")
+    group.setToolTip(f"Group: {row.group}")
+    background, border, text = _group_badge_colors(row.group)
+    group.setStyleSheet(
+        "QLabel#QueueGroupBadge {"
+        f"background: {background};"
+        f"border: 1px solid {border};"
+        f"color: {text};"
+        "}"
+    )
+
+    file_row.addWidget(file_name, 1)
+    file_row.addWidget(group, 0, Qt.AlignmentFlag.AlignRight)
+
+    status_row = QHBoxLayout()
+    status_row.setContentsMargins(0, 0, 0, 0)
+    status_row.setSpacing(10)
     primary = QLabel(f"{row.roi_status} · {row.measure_status}")
     primary.setObjectName("QueueStatusPrimary")
     primary.setToolTip(
@@ -862,10 +925,26 @@ def _queue_status_widget(row) -> QWidget:
     secondary = QLabel(row.export_status)
     secondary.setObjectName("QueueStatusSecondary")
     secondary.setToolTip(primary.toolTip())
+    status_row.addWidget(primary)
+    status_row.addStretch(1)
+    status_row.addWidget(secondary)
 
-    layout.addWidget(primary)
-    layout.addWidget(secondary)
+    layout.addLayout(file_row)
+    layout.addLayout(status_row)
     return widget
+
+
+def _group_badge_colors(group: str) -> tuple[str, str, str]:
+    palettes = [
+        ("#193a66", "#2f80ed", "#d7e8ff"),
+        ("#3a255f", "#8f5cff", "#eadfff"),
+        ("#173f35", "#2bb673", "#d8f7e9"),
+        ("#4a3318", "#f2a33a", "#ffedd0"),
+        ("#4a2135", "#e85d9f", "#ffe0ef"),
+        ("#26364f", "#5aa6ff", "#dcecff"),
+    ]
+    index = sum(ord(character) for character in group) % len(palettes)
+    return palettes[index]
 
 
 def _roi_is_too_small(roi: RectRoi | None) -> bool:
@@ -1325,6 +1404,12 @@ def _stylesheet() -> str:
         background: #12151a;
     }
 
+    #BoxPlotFilterLabel {
+        color: #aeb4be;
+        font-weight: 650;
+        padding-right: 4px;
+    }
+
     QLabel {
         color: #c9d0db;
     }
@@ -1334,9 +1419,22 @@ def _stylesheet() -> str:
         spacing: 6px;
     }
 
+    QCheckBox#BoxPlotFilterCheckbox {
+        spacing: 9px;
+        padding: 0 2px;
+    }
+
     QCheckBox::indicator {
         width: 14px;
         height: 14px;
+        border: 1px solid #596170;
+        border-radius: 3px;
+        background: #151820;
+    }
+
+    QCheckBox::indicator:checked {
+        border-color: #2f80ed;
+        background: #2f80ed;
     }
 
     QLineEdit {
@@ -1404,6 +1502,23 @@ def _stylesheet() -> str:
     #FileQueue::item {
         padding: 4px;
         border-bottom: 1px solid #20242b;
+    }
+
+    #QueueImageCell {
+        background: transparent;
+    }
+
+    #QueueFileName {
+        color: #eef2f8;
+        font-size: 12px;
+        font-weight: 650;
+    }
+
+    #QueueGroupBadge {
+        border-radius: 6px;
+        padding: 2px 7px;
+        font-size: 11px;
+        font-weight: 650;
     }
 
     QHeaderView::section {

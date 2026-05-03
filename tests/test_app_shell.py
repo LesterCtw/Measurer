@@ -3,7 +3,13 @@ import tifffile
 from PySide6.QtCore import QItemSelectionModel, QPoint, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QCheckBox, QFileDialog
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+)
 
 import measurer.app as app_module
 from measurer.app import create_window
@@ -28,9 +34,11 @@ def test_app_adds_tiff_to_queue_and_original_preview(qapp, tmp_path):
 
     assert summary.added_count == 1
     assert window.file_table.rowCount() == 1
-    assert window.file_table.item(0, 1).text() == "stem_zc.tif"
+    assert window.file_table.item(0, 1).text() == ""
     assert window.file_table.item(0, 2).text() == "Default"
-    assert window.file_table.item(0, 3).text() == "Full image"
+    assert _queue_file_text(window, 0) == ("stem_zc.tif", "Default")
+    assert _queue_status_text(window, 0) == ("Full image · Pending", "Not exported")
+    assert window.file_table.item(0, 3).text() == ""
     assert window.file_table.item(0, 4).text() == "Pending"
     assert window.file_table.item(0, 5).text() == "Not exported"
     assert window.status_label.text() == "Added 1 image."
@@ -147,7 +155,34 @@ def test_roi_drag_preview_maps_fitted_canvas_to_image_coordinates(qapp, tmp_path
     assert window.queue.rows[0].roi.y == 25
     assert window.queue.rows[0].roi.width == 100
     assert window.queue.rows[0].roi.height == 50
-    assert window.file_table.item(0, 3).text() == "Custom ROI"
+    assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
+
+
+def test_queue_status_cell_does_not_duplicate_status_text(qapp, tmp_path):
+    image_path = tmp_path / "status_cell.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.set_selected_roi(10, 10, 100, 100)
+    window.measure_current_button.click()
+
+    assert window.file_table.item(0, 3).text() == ""
+    assert _queue_status_text(window, 0) == (
+        "Custom ROI · Measured",
+        "Not exported",
+    )
 
 
 def test_roi_outline_does_not_fill_the_selected_region(qapp, tmp_path):
@@ -189,6 +224,101 @@ def test_file_queue_fits_sidebar_without_horizontal_scroll(qapp, tmp_path):
         Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     )
     assert visible_width <= window.file_table.viewport().width() + 2
+
+
+def test_file_queue_uses_single_image_cell_and_hides_detail_columns(qapp, tmp_path):
+    image_path = tmp_path / "very_long_measurement_source_name_for_review.tif"
+    tifffile.imwrite(image_path, np.ones((20, 20), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+
+    assert window.file_table.isColumnHidden(2)
+    assert window.file_table.isColumnHidden(3)
+    assert window.file_table.item(0, 1).text() == ""
+    assert _queue_file_text(window, 0) == (image_path.name, "Default")
+    assert _queue_status_text(window, 0) == ("Full image · Pending", "Not exported")
+
+
+def test_file_queue_does_not_allow_inline_editing(qapp, tmp_path):
+    image_path = tmp_path / "readonly_queue.tif"
+    tifffile.imwrite(image_path, np.ones((20, 20), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([image_path])
+
+    assert window.file_table.editTriggers() == (
+        QAbstractItemView.EditTrigger.NoEditTriggers
+    )
+    assert not window.file_table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable
+    assert not window.file_table.item(0, 2).flags() & Qt.ItemFlag.ItemIsEditable
+
+
+def test_group_controls_are_directly_above_file_queue(qapp):
+    window = create_window()
+
+    sidebar_layout = window.group_controls_panel.parentWidget().layout()
+
+    assert isinstance(window.group_controls_panel.layout(), QHBoxLayout)
+    assert sidebar_layout.indexOf(window.group_controls_panel) == (
+        sidebar_layout.indexOf(window.file_table) - 1
+    )
+
+
+def test_same_group_uses_same_queue_badge_color(qapp, tmp_path):
+    first_path = tmp_path / "first.tif"
+    second_path = tmp_path / "second.tif"
+    tifffile.imwrite(first_path, np.ones((20, 20), dtype=np.uint8))
+    tifffile.imwrite(second_path, np.ones((20, 20), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    selection_model = window.file_table.selectionModel()
+    selection_flags = (
+        QItemSelectionModel.SelectionFlag.Select
+        | QItemSelectionModel.SelectionFlag.Rows
+    )
+    selection_model.select(window.file_table.model().index(0, 0), selection_flags)
+    selection_model.select(window.file_table.model().index(1, 0), selection_flags)
+    window.group_input.setText("Process A")
+    window.set_group_button.click()
+
+    assert _queue_file_text(window, 0)[1] == "Process A"
+    assert _queue_file_text(window, 1)[1] == "Process A"
+    assert _queue_group_badge_style(window, 0) == _queue_group_badge_style(window, 1)
+
+
+def test_file_queue_normal_click_selects_only_one_row(qapp, tmp_path):
+    first_path = tmp_path / "first.tif"
+    second_path = tmp_path / "second.tif"
+    tifffile.imwrite(first_path, np.ones((20, 20), dtype=np.uint8))
+    tifffile.imwrite(second_path, np.ones((20, 20), dtype=np.uint8))
+    window = create_window()
+
+    window.add_image_paths([first_path, second_path])
+    window.file_table.setFixedSize(420, 180)
+    window.show()
+    qapp.processEvents()
+
+    first_center = window.file_table.visualItemRect(
+        window.file_table.item(0, 1)
+    ).center()
+    second_center = window.file_table.visualItemRect(
+        window.file_table.item(1, 1)
+    ).center()
+    QTest.mouseClick(
+        window.file_table.viewport(), Qt.MouseButton.LeftButton, pos=first_center
+    )
+    QTest.mouseClick(
+        window.file_table.viewport(), Qt.MouseButton.LeftButton, pos=second_center
+    )
+
+    assert window.file_table.selectionMode() == (
+        QAbstractItemView.SelectionMode.ExtendedSelection
+    )
+    assert sorted(
+        index.row() for index in window.file_table.selectionModel().selectedRows()
+    ) == [1]
 
 
 def test_app_applies_group_and_manual_scale_to_selected_rows(qapp, tmp_path):
@@ -233,13 +363,13 @@ def test_app_sets_and_clears_roi_for_selected_image(qapp, tmp_path):
     window.queue.record_measurement_result(0, {"measurements": [1]})
     window.set_selected_roi(-5, 2, 30, 20)
 
-    assert window.file_table.item(0, 3).text() == "Custom ROI"
+    assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
     assert window.file_table.item(0, 4).text() == "Pending"
     assert window.file_table.item(0, 5).text() == "Not exported"
 
     window.clear_roi_button.click()
 
-    assert window.file_table.item(0, 3).text() == "Full image"
+    assert _queue_status_text(window, 0)[0] == "Full image · Pending"
     assert window.queue.rows[0].roi is None
 
 
@@ -263,7 +393,7 @@ def test_app_measure_current_keeps_too_small_roi_pending(qapp, tmp_path):
     window.set_selected_roi(10, 10, 5, 5)
     window.measure_current_button.click()
 
-    assert window.file_table.item(0, 3).text() == "Custom ROI"
+    assert _queue_status_text(window, 0)[0] == "Custom ROI · Pending"
     assert window.file_table.item(0, 4).text() == "Pending"
     assert window.file_table.item(0, 5).text() == "Not exported"
     assert window.status_label.text() == "ROI is too small."
@@ -479,12 +609,14 @@ def test_app_box_plot_filters_measurement_types_without_remeasure(qapp, tmp_path
         checkbox.text(): checkbox for checkbox in window.findChildren(QCheckBox)
     }
     assert set(checkboxes) >= {
+        "All",
         "TCD",
         "BCD",
         "Height",
         "Horizontal Space",
         "Vertical Space",
     }
+    assert checkboxes["All"].isChecked()
     for measurement_type in app_module.MEASUREMENT_TYPE_ORDER:
         assert checkboxes[measurement_type].isChecked()
     assert "3 measurements" in window.result_values_label.text()
@@ -494,6 +626,7 @@ def test_app_box_plot_filters_measurement_types_without_remeasure(qapp, tmp_path
 
     assert window.current_view_mode == "Box Plot"
     assert window.file_table.item(0, 4).text() == "Measured"
+    assert not checkboxes["All"].isChecked()
     assert "2 measurements" in window.result_values_label.text()
     assert "TCD" in window.result_values_label.text()
     assert "BCD" in window.result_values_label.text()
@@ -502,8 +635,47 @@ def test_app_box_plot_filters_measurement_types_without_remeasure(qapp, tmp_path
     checkboxes["Height"].click()
 
     assert window.file_table.item(0, 4).text() == "Measured"
+    assert checkboxes["All"].isChecked()
     assert "3 measurements" in window.result_values_label.text()
     assert "Height" in window.result_values_label.text()
+
+
+def test_app_box_plot_all_filter_toggles_all_measurement_types(qapp, tmp_path):
+    image_path = tmp_path / "box_plot_all_filter_source.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.box_plot_view_button.click()
+
+    checkboxes = {
+        checkbox.text(): checkbox for checkbox in window.findChildren(QCheckBox)
+    }
+    checkboxes["All"].click()
+
+    assert not checkboxes["All"].isChecked()
+    for measurement_type in app_module.MEASUREMENT_TYPE_ORDER:
+        assert not checkboxes[measurement_type].isChecked()
+    assert "no selected measurement types" in window.result_values_label.text()
+
+    checkboxes["All"].click()
+
+    assert checkboxes["All"].isChecked()
+    for measurement_type in app_module.MEASUREMENT_TYPE_ORDER:
+        assert checkboxes[measurement_type].isChecked()
+    assert "3 measurements" in window.result_values_label.text()
 
 
 def test_app_box_plot_shows_empty_state_when_all_measurement_types_are_hidden(
@@ -1059,3 +1231,23 @@ def _render_widget(widget) -> QImage:
     image = QImage(widget.size(), QImage.Format.Format_RGB32)
     widget.render(image)
     return image
+
+
+def _queue_status_text(window, row_index: int) -> tuple[str, str]:
+    image_widget = window.file_table.cellWidget(row_index, 1)
+    primary = image_widget.findChild(QLabel, "QueueStatusPrimary")
+    secondary = image_widget.findChild(QLabel, "QueueStatusSecondary")
+    return primary.text(), secondary.text()
+
+
+def _queue_file_text(window, row_index: int) -> tuple[str, str]:
+    image_widget = window.file_table.cellWidget(row_index, 1)
+    file_name = image_widget.findChild(QLabel, "QueueFileName")
+    group = image_widget.findChild(QLabel, "QueueGroupBadge")
+    return file_name.text(), group.text()
+
+
+def _queue_group_badge_style(window, row_index: int) -> str:
+    image_widget = window.file_table.cellWidget(row_index, 1)
+    group = image_widget.findChild(QLabel, "QueueGroupBadge")
+    return group.styleSheet()

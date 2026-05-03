@@ -105,6 +105,12 @@ class SpacePairDiagnostic:
 
 
 @dataclass(frozen=True)
+class _VerticalGap:
+    value_px: float
+    line: MeasurementLine
+
+
+@dataclass(frozen=True)
 class MeasurementResult:
     status: str
     analysis_region: RectRoi
@@ -516,26 +522,10 @@ def _measure_vertical_spaces(
                 )
                 continue
 
-            x = round(
-                (
-                    max(upper_bbox[0], lower_bbox[0])
-                    + min(upper_bbox[2], lower_bbox[2])
-                )
-                / 2
-            )
-            upper_bottom_y = max(
-                _vertical_boundary_intersections(upper.refined_boundary, x)
-            )
-            lower_top_y = min(
-                _vertical_boundary_intersections(lower.refined_boundary, x)
-            )
             measurements[name] = Measurement(
                 name=name,
-                value_px=float(gap),
-                line=MeasurementLine(
-                    start=Point(x=x, y=round(upper_bottom_y)),
-                    end=Point(x=x, y=round(lower_top_y)),
-                ),
+                value_px=gap.value_px,
+                line=gap.line,
             )
     return measurements, rejected_pairs
 
@@ -556,23 +546,37 @@ def _fallback_vertical_space_line(
 
 def _minimum_vertical_boundary_gap(
     upper_boundary: RefinedBoundary, lower_boundary: RefinedBoundary
-) -> float | None:
+) -> _VerticalGap | None:
     upper_bbox = _boundary_bbox(upper_boundary)
     lower_bbox = _boundary_bbox(lower_boundary)
     overlap_min_x = max(upper_bbox[0], lower_bbox[0])
     overlap_max_x = min(upper_bbox[2], lower_bbox[2])
-    gaps: list[float] = []
+    best_gap: _VerticalGap | None = None
+    target_x = (overlap_min_x + overlap_max_x) / 2
     for x in range(overlap_min_x, overlap_max_x + 1):
         upper_intersections = _vertical_boundary_intersections(upper_boundary, x)
         lower_intersections = _vertical_boundary_intersections(lower_boundary, x)
         if not upper_intersections or not lower_intersections:
             continue
 
-        gaps.append(min(lower_intersections) - max(upper_intersections))
+        upper_bottom_y = max(upper_intersections)
+        lower_top_y = min(lower_intersections)
+        gap_value = max(0.0, lower_top_y - upper_bottom_y - 1)
+        gap = _VerticalGap(
+            value_px=gap_value,
+            line=MeasurementLine(
+                start=Point(x=x, y=round(upper_bottom_y + 1)),
+                end=Point(x=x, y=round(lower_top_y - 1)),
+            ),
+        )
+        if best_gap is None or gap.value_px < best_gap.value_px:
+            best_gap = gap
+        elif gap.value_px == best_gap.value_px and abs(x - target_x) <= abs(
+            best_gap.line.start.x - target_x
+        ):
+            best_gap = gap
 
-    if not gaps:
-        return None
-    return min(gaps)
+    return best_gap
 
 
 def _vertical_boundary_intersections(
