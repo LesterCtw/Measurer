@@ -72,6 +72,7 @@ class ImageQueue:
     def __init__(self) -> None:
         self.rows: list[QueueRow] = []
         self._paths: set[Path] = set()
+        self.default_manual_nm_per_px: float | None = None
 
     def add_images(self, paths: list[str | Path]) -> AddImagesSummary:
         added_count = 0
@@ -160,6 +161,19 @@ class ImageQueue:
             )
             return False
 
+        if self.default_manual_nm_per_px is None:
+            self.default_manual_nm_per_px = scale
+            self.rows[row_index] = replace(
+                row, manual_nm_per_px=None, scale_error=""
+            )
+            return True
+
+        if scale == self.default_manual_nm_per_px:
+            self.rows[row_index] = replace(
+                row, manual_nm_per_px=None, scale_error=""
+            )
+            return True
+
         self.rows[row_index] = replace(
             row, manual_nm_per_px=scale, scale_error=""
         )
@@ -170,7 +184,13 @@ class ImageQueue:
         if row.metadata_nm_per_px is not None:
             return ScaleResolution(source="metadata", nm_per_px=row.metadata_nm_per_px)
         if row.manual_nm_per_px is not None:
-            return ScaleResolution(source="manual", nm_per_px=row.manual_nm_per_px)
+            return ScaleResolution(
+                source="manual_override", nm_per_px=row.manual_nm_per_px
+            )
+        if self.default_manual_nm_per_px is not None:
+            return ScaleResolution(
+                source="manual_default", nm_per_px=self.default_manual_nm_per_px
+            )
         return ScaleResolution(source="px", nm_per_px=None)
 
     def record_measurement_result(self, row_index: int, result: object) -> None:
