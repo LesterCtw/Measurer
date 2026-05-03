@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish，以及 GUI Box Plot preview。這份 README 是目前專案狀態與設計共識的 source of truth。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF Add Images / Original preview、guided queue 的 Group / per-image scale / rectangle ROI state slice、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview，以及 single-source folder Export MVS。這份 README 是目前專案狀態與設計共識的 source of truth。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是給工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -56,13 +56,21 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 - Group 或 manual scale 改變後，Box Plot preview 會重新聚合現有 measurement results，不需要重測。
 - Box Plot preview 不混合 nm 與 px；同時存在 nm 與 px measurement results 時，顯示 warning 而不畫 mixed-unit plot。
 - Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、rejected Space pair count、refined points、fallback points、fallback ratio。
+- Export button 已支援 single-source folder MVS：只輸出 Measured 圖片，Pending / Failed 不輸出圖片也不寫入 Excel。
+- 如果沒有 Measured 圖片，Export 會被阻止，不建立 output folders/files，status card 顯示 `No measured images to export.`。
+- single-source Export 會在原圖資料夾下建立 `measured_image/` 與 `debug_image/`。
+- Result Images 會輸出到 `measured_image/`，顯示原圖、official Measurement Lines 與 values，不顯示 ROI/debug internals。
+- Debug Images 會輸出到 `debug_image/`，使用 MVS 2x2 diagnostic panel。
+- `measurements.xlsx` 會輸出到 `measured_image/`，包含 Summary、Measurements、Trace sheets。
+- Excel Summary 依 Group、measurement type、unit 彙整 successful measurements，不混合 nm 與 px。
+- Excel Measurements / Trace 只包含 Measured 圖片內產生的 final measurements，並使用 export 當下的 scale state。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
   - Measure = `Pending`
   - Export = `Not exported`
 
-目前尚未實作完整 Debug Image / export-grade diagnostics、Export、`.dm3` input、metadata scale parser、Excel 內嵌 box plot，以及真實 STEM ZC 樣本 validation。
+目前尚未實作 multi-source Export output folder picker、Export overwrite confirmation、完整 export-grade Debug Image diagnostics、`.dm3` input、metadata scale parser、Excel 內嵌 box plot，以及真實 STEM ZC 樣本 validation。
 
 ## 開發指令
 
@@ -911,7 +919,7 @@ Debug View 是工程師排錯用，不是報告用。
 - fallback boundary points 以粉紅色點顯示。
 - 下方文字顯示 kept / excluded 類別數量，以及 refined point count / fallback point count / fallback ratio。
 
-完整 Debug Image export 尚未實作。
+Debug Image export 已有 MVS 2x2 panel。完整 export-grade diagnostics 尚未實作。
 
 MVS Debug Image 使用 2x2 panel：
 
@@ -1153,10 +1161,10 @@ Export 範圍：
     image_001_debug.png
 ```
 
-如果目標檔案已有舊結果：
+如果目標檔案已有舊結果，設計上要先確認；目前實作尚未加入 overwrite confirmation，會直接覆蓋既有檔案：
 
 - 預設覆蓋。
-- 覆蓋前必須跳確認 dialog。
+- overwrite confirmation 尚未實作。
 - 多來源資料夾若有同名圖片，Result Image / Debug Image 同名檔案會覆蓋。
 
 覆蓋確認 dialog MVS 規則：

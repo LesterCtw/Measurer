@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from measurer.export import export_measured_batch
 from measurer.image_queue import AddImagesSummary, ImageQueue, RectRoi
 from measurer.measurement import Measurement, MeasurementResult, measure_image
 
@@ -96,6 +97,8 @@ class MeasurerWindow(QMainWindow):
         self.clear_roi_button.clicked.connect(self._clear_selected_roi)
         self.measure_current_button = QPushButton("Measure Current")
         self.measure_current_button.clicked.connect(self._measure_selected_image)
+        self.export_button = QPushButton("Export")
+        self.export_button.clicked.connect(self._export_measured_images)
         self.original_view_button = QPushButton("Original")
         self.original_view_button.clicked.connect(self._show_original_view)
         self.result_view_button = QPushButton("Result")
@@ -128,6 +131,7 @@ class MeasurerWindow(QMainWindow):
         controls.addWidget(self.scale_error_label)
         controls.addWidget(self.clear_roi_button)
         controls.addWidget(self.measure_current_button)
+        controls.addWidget(self.export_button)
         controls.addWidget(self.file_table)
         controls.addWidget(self.status_label)
 
@@ -261,6 +265,11 @@ class MeasurerWindow(QMainWindow):
         self.result_values_label.setText(_format_result_values(result, scale.nm_per_px))
         self.current_view_mode = "Result View"
         self.status_label.setText("Measurement completed.")
+
+    def _export_measured_images(self) -> None:
+        result = export_measured_batch(self.queue)
+        self._refresh_file_table()
+        self.status_label.setText(result.message)
 
     def _show_original_view(self) -> None:
         row_index = self.file_table.currentRow()

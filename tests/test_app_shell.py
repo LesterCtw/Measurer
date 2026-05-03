@@ -399,6 +399,47 @@ def test_app_failed_measure_current_stays_on_original_view_with_reason(
     assert window.status_label.text() == "No metal candidates"
 
 
+def test_app_export_blocks_when_no_images_are_measured(qapp, tmp_path):
+    image_path = tmp_path / "pending_export.tif"
+    tifffile.imwrite(image_path, np.ones((128, 128), dtype=np.uint8) * 20)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.export_button.click()
+
+    assert window.status_label.text() == "No measured images to export."
+    assert not (tmp_path / "measured_image").exists()
+    assert not (tmp_path / "debug_image").exists()
+    assert window.file_table.item(0, 5).text() == "Not exported"
+
+
+def test_app_export_writes_measured_images_and_updates_status(qapp, tmp_path):
+    image_path = tmp_path / "gui_export.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.export_button.click()
+
+    assert window.file_table.item(0, 5).text() == "Exported"
+    assert window.status_label.text() == "Exported 1 measured image."
+    assert (tmp_path / "measured_image" / "gui_export_result.png").is_file()
+    assert (tmp_path / "debug_image" / "gui_export_debug.png").is_file()
+    assert (tmp_path / "measured_image" / "measurements.xlsx").is_file()
+
+
 def test_app_debug_view_shows_candidate_filtering_diagnostics(qapp, tmp_path):
     image_path = tmp_path / "contamination.tif"
     image = create_single_metal_island_image(

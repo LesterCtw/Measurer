@@ -189,6 +189,14 @@ class ImageQueue:
             measurement_debug=debug_result,
         )
 
+    def record_export_success(self, row_indexes: list[int]) -> None:
+        for row_index in row_indexes:
+            if 0 <= row_index < len(self.rows):
+                self.rows[row_index] = replace(
+                    self.rows[row_index],
+                    export_status="Exported",
+                )
+
     def set_roi(self, row_index: int, roi: RectRoi) -> bool:
         if row_index < 0 or row_index >= len(self.rows):
             return False
