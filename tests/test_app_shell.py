@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 import measurer.app as app_module
 from measurer.app import create_window
+from measurer.box_plot import BoxPlotPoint, box_plot_buckets, box_plot_ticks
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
 
@@ -927,13 +928,13 @@ def test_app_box_plot_shows_empty_state_when_all_measurement_types_are_hidden(
 
 def test_box_plot_buckets_alternate_groups_within_each_measurement_type():
     points = [
-        app_module.BoxPlotPoint("LF", "BCD", 4.0, "px"),
-        app_module.BoxPlotPoint("EF", "BCD", 3.0, "px"),
-        app_module.BoxPlotPoint("LF", "TCD", 2.0, "px"),
-        app_module.BoxPlotPoint("EF", "TCD", 1.0, "px"),
+        BoxPlotPoint("LF", "BCD", 4.0, "px"),
+        BoxPlotPoint("EF", "BCD", 3.0, "px"),
+        BoxPlotPoint("LF", "TCD", 2.0, "px"),
+        BoxPlotPoint("EF", "TCD", 1.0, "px"),
     ]
 
-    buckets = app_module._box_plot_buckets(points)
+    buckets = box_plot_buckets(points)
 
     assert [key for key, _values in buckets] == [
         ("EF", "TCD"),
@@ -944,7 +945,7 @@ def test_box_plot_buckets_alternate_groups_within_each_measurement_type():
 
 
 def test_box_plot_ticks_include_range_endpoints():
-    ticks = app_module._box_plot_ticks(26.0, 60.0)
+    ticks = box_plot_ticks(26.0, 60.0)
 
     assert ticks == [26.0, 34.5, 43.0, 51.5, 60.0]
 

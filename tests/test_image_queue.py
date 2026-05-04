@@ -1,7 +1,8 @@
 import numpy as np
 import tifffile
 
-from measurer.image_queue import ImageQueue, PolygonRoi, RectRoi, ScaleResolution
+from measurer.image_queue import ImageQueue, ScaleResolution
+from measurer.roi import PolygonRoi, RectRoi
 
 
 def test_add_images_accepts_dm3_2d_image_with_px_fallback(monkeypatch, tmp_path):

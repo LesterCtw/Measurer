@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from measurer.image_queue import PolygonRoi, RectRoi, RoiSelection
 from measurer.measurement import (
     MeasurementConfig,
     Point,
     _measure_single_metal_island,
     measure_image,
 )
+from measurer.roi import PolygonRoi, RectRoi, RoiSelection
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
 

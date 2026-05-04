@@ -9,31 +9,21 @@ from openpyxl import Workbook
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QApplication
 
-from measurer.image_queue import ImageQueue, RoiSelection
+from measurer.image_display import normalize_to_uint8
+from measurer.image_queue import ImageQueue
 from measurer.measurement import Measurement, MeasurementResult
+from measurer.measurement_report import (
+    MEASUREMENT_TYPE_ORDER,
+    measurement_report_key,
+    successful_measurement_report_items,
+)
+from measurer.roi import RoiSelection
 
 
 NO_MEASURED_IMAGES_MESSAGE = "No measured images to export."
 MULTI_SOURCE_OUTPUT_FOLDER_MESSAGE = "Choose an output folder for multi-source export."
 OVERWRITE_CONFIRMATION_MESSAGE = "Confirm overwrite to export."
 _QAPPLICATION: QApplication | None = None
-
-MEASUREMENT_TYPE_ORDER = [
-    "TCD",
-    "BCD",
-    "Height",
-    "Horizontal Space",
-    "Vertical Space",
-]
-
-MEASUREMENT_COLORS = {
-    "TCD": QColor(64, 196, 255),
-    "BCD": QColor(255, 183, 77),
-    "Height": QColor(255, 210, 64),
-    "Horizontal Space": QColor(186, 104, 200),
-    "Vertical Space": QColor(129, 199, 132),
-}
-
 
 @dataclass(frozen=True)
 class OverwriteSummary:
@@ -267,10 +257,11 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
         unit = "px" if scale_resolution.nm_per_px is None else "nm"
         scale = 1.0 if scale_resolution.nm_per_px is None else scale_resolution.nm_per_px
         for measurement in result.measurements.values():
-            measurement_type = _measurement_type(measurement)
-            if measurement_type is None:
+            report_key = measurement_report_key(measurement)
+            if report_key is None:
                 continue
-            target_id = _target_id(measurement, measurement_type)
+            measurement_type = report_key.measurement_type
+            target_id = report_key.target_id
             value = (
                 None
                 if measurement.status != "success"
@@ -414,15 +405,9 @@ def _fallback_ratio(refined_count: int, fallback_count: int) -> float | None:
 def _draw_measurement_lines(
     painter: QPainter, result: MeasurementResult, nm_per_px: float | None
 ) -> None:
-    unit = "px" if nm_per_px is None else "nm"
-    scale = 1.0 if nm_per_px is None else nm_per_px
-    for measurement in result.measurements.values():
-        if measurement.status != "success":
-            continue
-        measurement_type = _measurement_type(measurement)
-        if measurement_type is None:
-            continue
-        painter.setPen(QPen(MEASUREMENT_COLORS[measurement_type], 2))
+    for item in successful_measurement_report_items(result, nm_per_px):
+        measurement = item.measurement
+        painter.setPen(QPen(QColor(*item.color_rgb), 2))
         painter.drawLine(
             measurement.line.start.x,
             measurement.line.start.y,
@@ -433,7 +418,7 @@ def _draw_measurement_lines(
         painter.drawText(
             round((measurement.line.start.x + measurement.line.end.x) / 2),
             round((measurement.line.start.y + measurement.line.end.y) / 2),
-            f"{measurement.value_px * scale:.1f} {unit}",
+            item.label,
         )
 
 
@@ -478,7 +463,7 @@ def _component_qimage(image: np.ndarray, result: MeasurementResult) -> QImage:
 
 
 def _rgb_qimage(image: np.ndarray) -> QImage:
-    display = _normalize_to_uint8(image)
+    display = normalize_to_uint8(image)
     height, width = display.shape
     rgb = np.ascontiguousarray(np.dstack([display, display, display]))
     return QImage(
@@ -488,28 +473,6 @@ def _rgb_qimage(image: np.ndarray) -> QImage:
         width * 3,
         QImage.Format.Format_RGB888,
     ).copy()
-
-
-def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
-    if image.dtype == np.uint8:
-        return np.ascontiguousarray(image)
-    max_value = float(np.max(image))
-    if max_value <= 0:
-        return np.zeros(image.shape, dtype=np.uint8)
-    scaled = np.asarray(image, dtype=np.float32) / max_value * 255
-    return np.ascontiguousarray(np.rint(scaled).astype(np.uint8))
-
-
-def _measurement_type(measurement: Measurement) -> str | None:
-    for measurement_type in sorted(MEASUREMENT_TYPE_ORDER, key=len, reverse=True):
-        if measurement.name.endswith(measurement_type):
-            return measurement_type
-    return None
-
-
-def _target_id(measurement: Measurement, measurement_type: str) -> str:
-    prefix = measurement.name[: -len(measurement_type)].strip()
-    return prefix or "M001"
 
 
 def _format_export_message(

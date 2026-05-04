@@ -2,8 +2,9 @@ import numpy as np
 from openpyxl import load_workbook
 
 from measurer.export import export_measured_batch
-from measurer.image_queue import ImageQueue, PolygonRoi, RectRoi
+from measurer.image_queue import ImageQueue
 from measurer.measurement import measure_image
+from measurer.roi import PolygonRoi, RectRoi
 from measurer.synthetic import SingleMetalIslandSpec, create_single_metal_island_image
 
 

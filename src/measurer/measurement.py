@@ -5,7 +5,12 @@ from math import ceil
 
 import numpy as np
 
-from measurer.image_queue import RectRoi, RoiSelection, roi_union_mask
+from measurer.roi import (
+    RectRoi,
+    RoiSelection,
+    clamp_rect_roi_to_image,
+    roi_union_mask,
+)
 
 HARD_MIN_COMPONENT_AREA_PX = 100
 MIN_AREA_RATIO_TO_MEDIAN = 0.03
@@ -184,12 +189,12 @@ def _analysis_region_for(
         if bounding_box is None:
             return RectRoi(x=0, y=0, width=image_width, height=image_height)
 
-        clamped_roi = _clamped_roi(bounding_box, image)
+        clamped_roi = clamp_rect_roi_to_image(bounding_box, image)
         if clamped_roi is None:
             return RectRoi(x=0, y=0, width=image_width, height=image_height)
         return clamped_roi
 
-    clamped_roi = _clamped_roi(roi, image)
+    clamped_roi = clamp_rect_roi_to_image(roi, image)
     if clamped_roi is None:
         return RectRoi(x=0, y=0, width=0, height=0)
     return clamped_roi
@@ -207,19 +212,6 @@ def _analysis_mask_for(
         return mask
 
     return roi_union_mask(roi, image, analysis_region)
-
-
-def _clamped_roi(roi: RectRoi, image: np.ndarray) -> RectRoi | None:
-    image_height, image_width = image.shape
-    left = max(0, roi.x)
-    top = max(0, roi.y)
-    right = min(image_width, roi.x + roi.width)
-    bottom = min(image_height, roi.y + roi.height)
-    width = right - left
-    height = bottom - top
-    if width <= 0 or height <= 0:
-        return None
-    return RectRoi(x=left, y=top, width=width, height=height)
 
 
 def _otsu_threshold(region: np.ndarray) -> float:
