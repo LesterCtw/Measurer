@@ -6,24 +6,24 @@ from statistics import mean, median, pstdev
 
 import numpy as np
 from openpyxl import Workbook
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QApplication
 
-from measurer.image_display import normalize_to_uint8
+from measurer.debug_render import debug_panel_qimage
 from measurer.image_queue import ImageQueue
-from measurer.measurement import Measurement, MeasurementResult
+from measurer.measurement import MeasurementResult
 from measurer.measurement_report import (
     MEASUREMENT_TYPE_ORDER,
     measurement_report_key,
-    successful_measurement_report_items,
 )
-from measurer.roi import RoiSelection
+from measurer.result_render import result_qimage
+from measurer.trace_sheet import TRACE_SHEET_HEADER, trace_sheet_row
 
 
 NO_MEASURED_IMAGES_MESSAGE = "No measured images to export."
 MULTI_SOURCE_OUTPUT_FOLDER_MESSAGE = "Choose an output folder for multi-source export."
 OVERWRITE_CONFIRMATION_MESSAGE = "Confirm overwrite to export."
 _QAPPLICATION: QApplication | None = None
+
 
 @dataclass(frozen=True)
 class OverwriteSummary:
@@ -166,33 +166,14 @@ def _save_result_image(
     output_path: Path,
 ) -> None:
     _ensure_qapplication()
-    qimage = _rgb_qimage(image)
-    painter = QPainter(qimage)
-    _draw_measurement_lines(painter, result, nm_per_px)
-    painter.end()
-    qimage.save(str(output_path))
+    result_qimage(image, result, nm_per_px).save(str(output_path))
 
 
 def _save_debug_image(
     image: np.ndarray, result: MeasurementResult, output_path: Path
 ) -> None:
     _ensure_qapplication()
-    original = _rgb_qimage(image)
-    width = original.width()
-    height = original.height()
-    debug_image = QImage(width * 2, height * 2, QImage.Format.Format_RGB888)
-    debug_image.fill(QColor(18, 22, 28))
-    painter = QPainter(debug_image)
-    painter.drawImage(0, 0, original)
-    painter.drawImage(width, 0, _rough_mask_qimage(image, result))
-    painter.drawImage(0, height, _component_qimage(image, result))
-    result_panel = _rgb_qimage(image)
-    result_painter = QPainter(result_panel)
-    _draw_measurement_lines(result_painter, result, nm_per_px=None)
-    result_painter.end()
-    painter.drawImage(width, height, result_panel)
-    painter.end()
-    debug_image.save(str(output_path))
+    debug_panel_qimage(image, result).save(str(output_path))
 
 
 def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
@@ -218,32 +199,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
     measurements_sheet.append(
         ["file", "group", "measurement type", "target ID", "status", "value", "unit"]
     )
-    trace_sheet.append(
-        [
-            "file",
-            "group",
-            "measurement type",
-            "target ID",
-            "status",
-            "reason",
-            "value_px",
-            "x1_px",
-            "y1_px",
-            "x2_px",
-            "y2_px",
-            "scale_nm_per_px",
-            "scale_source",
-            "roi_type",
-            "roi_x_px",
-            "roi_y_px",
-            "roi_width_px",
-            "roi_height_px",
-            "roi_shape_count",
-            "refined_point_count",
-            "fallback_point_count",
-            "fallback_ratio",
-        ]
-    )
+    trace_sheet.append(TRACE_SHEET_HEADER)
 
     summary_values: dict[tuple[str, str, str], list[float]] = {}
     for row_index, row in enumerate(queue.rows):
@@ -283,7 +239,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
                     value
                 )
             trace_sheet.append(
-                _trace_row(
+                trace_sheet_row(
                     file_name=row.file_name,
                     group=row.group,
                     measurement=measurement,
@@ -292,8 +248,7 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
                     result=result,
                     scale_source=scale_resolution.source,
                     scale_nm_per_px=scale_resolution.nm_per_px,
-                    roi_type=_roi_type(row.roi),
-                    roi_shape_count=_roi_shape_count(row.roi),
+                    roi=row.roi,
                 )
             )
 
@@ -319,160 +274,6 @@ def _write_workbook(queue: ImageQueue, output_path: Path) -> None:
             ]
         )
     workbook.save(output_path)
-
-
-def _trace_row(
-    file_name: str,
-    group: str,
-    measurement: Measurement,
-    measurement_type: str,
-    target_id: str,
-    result: MeasurementResult,
-    scale_source: str,
-    scale_nm_per_px: float | None,
-    roi_type: str,
-    roi_shape_count: int,
-) -> list[object]:
-    roi = result.analysis_region
-    refined_count, fallback_count, fallback_ratio = _refinement_summary(
-        result, target_id
-    )
-    return [
-        file_name,
-        group,
-        measurement_type,
-        target_id,
-        measurement.status,
-        measurement.failure_reason,
-        measurement.value_px if measurement.status == "success" else None,
-        measurement.line.start.x,
-        measurement.line.start.y,
-        measurement.line.end.x,
-        measurement.line.end.y,
-        scale_nm_per_px,
-        scale_source,
-        roi_type,
-        roi.x,
-        roi.y,
-        roi.width,
-        roi.height,
-        roi_shape_count,
-        refined_count,
-        fallback_count,
-        fallback_ratio,
-    ]
-
-
-def _roi_type(roi: RoiSelection) -> str:
-    if roi.is_empty:
-        return "full_image"
-    return "union"
-
-
-def _roi_shape_count(roi: RoiSelection) -> int:
-    return len(roi.rectangles) + len(roi.polygons)
-
-
-def _refinement_summary(
-    result: MeasurementResult, target_id: str
-) -> tuple[int, int, float | None]:
-    if not result.metal_islands:
-        refined = result.refined_boundary.refined_point_count
-        fallback = result.refined_boundary.fallback_point_count
-        return refined, fallback, _fallback_ratio(refined, fallback)
-
-    target_ids = target_id.split("-")
-    boundaries = [
-        metal.refined_boundary
-        for metal in result.metal_islands
-        if metal.id in target_ids
-    ]
-    if not boundaries and result.metal_islands:
-        boundaries = [result.metal_islands[0].refined_boundary]
-
-    refined = sum(boundary.refined_point_count for boundary in boundaries)
-    fallback = sum(boundary.fallback_point_count for boundary in boundaries)
-    return refined, fallback, _fallback_ratio(refined, fallback)
-
-
-def _fallback_ratio(refined_count: int, fallback_count: int) -> float | None:
-    total = refined_count + fallback_count
-    if total == 0:
-        return None
-    return fallback_count / total
-
-
-def _draw_measurement_lines(
-    painter: QPainter, result: MeasurementResult, nm_per_px: float | None
-) -> None:
-    for item in successful_measurement_report_items(result, nm_per_px):
-        measurement = item.measurement
-        painter.setPen(QPen(QColor(*item.color_rgb), 2))
-        painter.drawLine(
-            measurement.line.start.x,
-            measurement.line.start.y,
-            measurement.line.end.x,
-            measurement.line.end.y,
-        )
-        painter.setPen(QPen(QColor(245, 248, 252), 1))
-        painter.drawText(
-            round((measurement.line.start.x + measurement.line.end.x) / 2),
-            round((measurement.line.start.y + measurement.line.end.y) / 2),
-            item.label,
-        )
-
-
-def _rough_mask_qimage(image: np.ndarray, result: MeasurementResult) -> QImage:
-    qimage = _rgb_qimage(image)
-    if result.detection is None:
-        return qimage
-
-    region = result.analysis_region
-    painter = QPainter(qimage)
-    painter.setPen(QPen(QColor(24, 96, 180), 1))
-    mask = result.detection.rough_mask
-    ys, xs = np.where(mask)
-    for x, y in zip(xs, ys, strict=False):
-        painter.drawPoint(region.x + int(x), region.y + int(y))
-    painter.end()
-    return qimage
-
-
-def _component_qimage(image: np.ndarray, result: MeasurementResult) -> QImage:
-    qimage = _rgb_qimage(image)
-    if result.detection is None:
-        return qimage
-
-    painter = QPainter(qimage)
-    for components, color in [
-        (result.detection.kept_candidates, QColor(80, 220, 120)),
-        (result.detection.excluded_small_components, QColor(255, 190, 64)),
-        (result.detection.excluded_boundary_touch_components, QColor(255, 80, 80)),
-    ]:
-        painter.setPen(QPen(color, 2))
-        for component in components:
-            min_x, min_y, max_x, max_y = component.bbox
-            painter.drawRect(
-                result.analysis_region.x + min_x,
-                result.analysis_region.y + min_y,
-                max_x - min_x + 1,
-                max_y - min_y + 1,
-            )
-    painter.end()
-    return qimage
-
-
-def _rgb_qimage(image: np.ndarray) -> QImage:
-    display = normalize_to_uint8(image)
-    height, width = display.shape
-    rgb = np.ascontiguousarray(np.dstack([display, display, display]))
-    return QImage(
-        rgb.data,
-        width,
-        height,
-        width * 3,
-        QImage.Format.Format_RGB888,
-    ).copy()
 
 
 def _format_export_message(
