@@ -798,6 +798,172 @@ def test_app_box_plot_preview_summarizes_measured_results_by_group(qapp, tmp_pat
     assert "px" in window.result_values_label.text()
 
 
+def test_app_p_chart_preview_summarizes_measured_results_by_group(qapp, tmp_path):
+    image_path = tmp_path / "p_chart_source.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.group_input.setText("Process A")
+    window.set_group_button.click()
+    window.measure_current_button.click()
+    window.p_chart_view_button.click()
+
+    assert window.current_view_mode == "P-Chart"
+    rendered = _render_widget(window.image_label)
+    assert rendered.width() > 0
+    assert rendered.height() > 0
+    assert "P-Chart" in window.result_values_label.text()
+    assert "Process A" in window.result_values_label.text()
+    assert "TCD" in window.result_values_label.text()
+    assert "BCD" in window.result_values_label.text()
+    assert "Height" in window.result_values_label.text()
+    assert "3 measurements" in window.result_values_label.text()
+    assert "px" in window.result_values_label.text()
+
+
+def test_app_p_chart_filters_measurement_types_without_remeasure(qapp, tmp_path):
+    image_path = tmp_path / "p_chart_filter_source.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.p_chart_view_button.click()
+    checkboxes = {
+        checkbox.text(): checkbox for checkbox in window.findChildren(QCheckBox)
+    }
+
+    assert "3 measurements" in window.result_values_label.text()
+    checkboxes["Height"].click()
+
+    assert window.current_view_mode == "P-Chart"
+    assert window.file_table.item(0, 4).text() == "Measured"
+    assert not checkboxes["All"].isChecked()
+    assert "2 measurements" in window.result_values_label.text()
+    assert "TCD" in window.result_values_label.text()
+    assert "BCD" in window.result_values_label.text()
+    assert "Height" not in window.result_values_label.text()
+
+
+def test_app_p_chart_refreshes_when_group_changes_without_remeasure(qapp, tmp_path):
+    image_path = tmp_path / "p_chart_group_refresh.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.group_input.setText("Process A")
+    window.set_group_button.click()
+    window.measure_current_button.click()
+    window.p_chart_view_button.click()
+    assert "Process A" in window.result_values_label.text()
+
+    window.group_input.setText("Process B")
+    window.set_group_button.click()
+
+    assert window.current_view_mode == "P-Chart"
+    assert "Process B" in window.result_values_label.text()
+    assert "Process A" not in window.result_values_label.text()
+    assert window.file_table.item(0, 4).text() == "Measured"
+
+
+def test_app_p_chart_refreshes_when_manual_scale_changes_without_remeasure(
+    qapp, tmp_path
+):
+    image_path = tmp_path / "p_chart_scale_refresh.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(image_path, image)
+    window = create_window()
+
+    window.add_image_paths([image_path])
+    window.measure_current_button.click()
+    window.p_chart_view_button.click()
+    assert "Unit: px" in window.result_values_label.text()
+
+    window.scale_input.setText("0.5")
+    window.scale_input.editingFinished.emit()
+
+    assert window.current_view_mode == "P-Chart"
+    assert "Unit: nm" in window.result_values_label.text()
+    assert "3 measurements" in window.result_values_label.text()
+    assert window.file_table.item(0, 4).text() == "Measured"
+
+
+def test_app_p_chart_warns_instead_of_drawing_mixed_units(qapp, tmp_path):
+    first_path = tmp_path / "p_chart_nm.tif"
+    second_path = tmp_path / "p_chart_px.tif"
+    image = create_single_metal_island_image(
+        SingleMetalIslandSpec(
+            image_width=128,
+            image_height=128,
+            center_x=64,
+            top_y=24,
+            height=60,
+            tcd=32,
+            bcd=48,
+        )
+    )
+    tifffile.imwrite(first_path, image)
+    tifffile.imwrite(second_path, image)
+    window = create_window()
+
+    window.queue.add_image_data(first_path, image, metadata_nm_per_px=0.5)
+    window.queue.add_image_data(second_path, image)
+    window._refresh_file_table()
+    window.file_table.setCurrentCell(0, 1)
+    window._select_image(0)
+    window.measure_current_button.click()
+    window.file_table.setCurrentCell(1, 1)
+    window.measure_current_button.click()
+    window.p_chart_view_button.click()
+
+    assert window.current_view_mode == "P-Chart"
+    assert "cannot mix nm and px" in window.result_values_label.text()
+
+
 def test_app_box_plot_filters_measurement_types_without_remeasure(qapp, tmp_path):
     image_path = tmp_path / "box_plot_filter_source.tif"
     image = create_single_metal_island_image(

@@ -1,6 +1,6 @@
 # Measurer
 
-專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF / `.dm3` Add Images / fit-to-window Original preview、guided queue 的 Group / batch default scale / per-image scale override / rectangle + polygon ROI Union editing、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview、Denoiser-inspired 深色 UI，以及 Export MVS 的 single-source / multi-source output 與 overwrite confirmation。這份 README 是目前專案狀態與設計共識的唯一可信來源。
+專案狀態：MVS 規格已整理，目前已完成 PySide6 app shell、TIFF / `.dm3` Add Images / fit-to-window Original preview、guided queue 的 Group / batch default scale / per-image scale override / rectangle + polygon ROI Union editing、Metal Island candidate filtering、Rough Boundary Fallback / trace-ready refinement diagnostics、多 Metal Islands 的 TCD / BCD / Height / Horizontal Space / Vertical Space measurement tracer bullet、Result View polish、GUI Box Plot preview、GUI P-Chart preview、Denoiser-inspired 深色 UI，以及 Export MVS 的 single-source / multi-source output 與 overwrite confirmation。這份 README 是目前專案狀態與設計共識的唯一可信來源。
 
 Measurer 是一個 PySide6 desktop GUI tool，用來量測半導體 MOM 結構 STEM ZC 影像中的 metal 尺寸與 spacing。工具定位是讓工程師逐張檢查 ROI、執行量測、確認 Result View，最後批次匯出結果。
 
@@ -74,7 +74,7 @@ assets/icons/measurer.ico
 - Result View 的 Measurement Lines / values 由 canvas 依目前顯示尺寸繪製，不把文字先畫進原始影像 pixmap 再放大。
 - Result View 下方 summary 依 measurement type 彙整 value range 與 count，避免多 Metal Islands 時把每一筆完整名稱串成難讀長句。
 - Result View 使用固定 measurement type 顏色：TCD cyan、BCD orange、Height yellow、Horizontal Space magenta、Vertical Space lime。
-- Result View、Box Plot preview 與 Export 目前共用同一組 measurement type 順序、target ID 解析、scale label、summary 與顏色定義，避免 GUI 與匯出結果對 TCD / BCD / Height / Horizontal Space / Vertical Space 的呈現規則分歧。
+- Result View、Box Plot preview、P-Chart preview 與 Export 目前共用同一組 measurement type 順序、target ID 解析、scale label、summary 與顏色定義，避免 GUI 與匯出結果對 TCD / BCD / Height / Horizontal Space / Vertical Space 的呈現規則分歧。
 - Exported Result Image rendering 已集中在 `result_render.py`；之後若要調整 official Measurement Lines 與 value label 的 QImage rendering，優先改這個 module。
 - Result View 數值文字顯示在線段中心附近，使用白字加 dark outline，會 clamp 在 image bounds 內，並用固定上下偏移減少局部碰撞；若仍重疊，不讓 rendering failed。
 - batch manual default 或單張 manual override 改變後，Result View 會用現有 px geometry 重新換算顯示值與單位，不需要重測。
@@ -83,6 +83,8 @@ assets/icons/measurer.ico
 - Box Plot preview 提供 All 與 TCD / BCD / Height / Horizontal Space / Vertical Space checkbox，可只顯示勾選的 measurement types；切換 checkbox 會用現有 results 立即刷新，不需要重測。
 - Group、batch manual default 或單張 manual override 改變後，Box Plot preview 會重新聚合現有 measurement results，不需要重測。
 - Box Plot preview 不混合 nm 與 px；同時存在 nm 與 px measurement results 時，顯示 warning 而不畫 mixed-unit plot。
+- P-Chart preview 已可從 GUI 切換，使用常態機率尺度顯示每個 Group + measurement type 的 successful final measurements；raw points 依 value 排序後用直線連接，不畫 fitted reference line。
+- P-Chart preview 和 Box Plot preview 共用 measurement type checkbox、unit 混用檢查、Group/scale 即時刷新規則；每個 bucket 少於 2 筆時顯示 insufficient data，不畫 distribution curve。
 - Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、rejected Space pair count、refined points、fallback points、fallback ratio。
 - Debug View / Debug Image 的 rough mask、candidate boxes 與 Refined Boundary diagnostic rendering 已集中在 `debug_render.py`，避免 GUI 與匯出圖各自維護一套 diagnostic drawing rules。
 - Export button 已支援 single-source / multi-source folder MVS：只輸出 Measured 圖片，Pending / Failed 不輸出圖片也不寫入 Excel。
@@ -259,8 +261,8 @@ MVS 會包含：
 - 面積過濾與邊界截斷排除。
 - refined boundary，不使用 Otsu contour 當正式量測邊界。
 - 自動量測 TCD、BCD、Height、Horizontal Space、Vertical Space。
-- Original / Result / Box Plot / Debug preview。
-- GUI box plot 顯示 group 分布。
+- Original / Result / Box Plot / P-Chart / Debug preview。
+- GUI box plot 與 P-Chart 顯示 group 分布。
 - Export 時依圖片來源輸出到 `measured_image/` 與 `debug_image/`。
 - 匯出 Result Images、Debug Images、xlsx。
 
@@ -1070,6 +1072,7 @@ Text: white with dark outline
 - Original
 - Result
 - Box Plot
+- P-Chart
 
 次要：
 
@@ -1079,7 +1082,7 @@ Debug 功能要稍微藏起來，不破壞主 UI 簡潔性。
 
 建議：
 
-- Original / Result / Box Plot 是主要切換。
+- Original / Result / Box Plot / P-Chart 是主要切換。
 - Debug 用右上角小按鈕或 Advanced / More 區域。
 
 行為：
@@ -1173,6 +1176,25 @@ Unit 規則：
 
 - 不允許混合 nm 與 px。
 - selected groups 若混到 nm 和 px，不畫圖並顯示 warning。
+
+## P-Chart
+
+GUI P-Chart preview 已有 MVS 版本。這裡的 P-Chart 指 normal probability plot view，不是 proportion control chart。Excel MVS 暫不內嵌 probability chart 圖片。
+
+P-Chart 目前從 app state 中的 successful final measurements 產生，不重新執行 Measure Current。它使用每張圖片當下的 Group 與 scale resolution，把 px geometry 轉成目前顯示單位後再聚合。
+
+目前行為：
+
+- 依 Group 與 measurement type 彙整。
+- x-axis 排序為 measurement type 優先、Group 次之，和 Box Plot 一致。
+- X 軸是 measurement value；Y 軸顯示 cumulative probability percentage，但位置使用 normal probability scale。
+- 每個 Group + measurement type bucket 內的 raw points 依 value 排序，並用直線連接。
+- 不畫 fitted reference line、normality score、R-squared、p-value 或 pass/fail 判定。
+- 每個 bucket 至少需要 2 筆 measurement 才畫 distribution curve；只有 1 筆時顯示 insufficient data。
+- All checkbox 與 TCD、BCD、Height、Horizontal Space、Vertical Space checkbox 和 Box Plot 共用。
+- Group 改變後會直接刷新，不需要重測。
+- batch manual default 或單張 manual override 改變後會直接刷新，不需要重測。
+- 如果同一個 P-Chart preview 會混合 nm 與 px，顯示 warning，不畫 mixed-unit plot。
 
 ## Excel Export
 

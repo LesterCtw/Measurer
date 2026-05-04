@@ -80,6 +80,10 @@ _避免使用_: annotated image
 GUI 中用來檢查 segmentation、boundaries、grouping 與 rejected candidates 的畫面。
 _避免使用_: result view
 
+**P-Chart**:
+GUI 中用常態機率尺度顯示 Group 量測分布的 normal probability plot view。
+_避免使用_: proportion control chart
+
 **Debug Image**:
 匯出的診斷圖片，用來檢查演算法行為。
 _避免使用_: result image
@@ -107,6 +111,7 @@ _避免使用_: tag, class, folder
 - 一條 **Measurement Line** 代表一筆最終 TCD、BCD、Height、Horizontal Space 或 Vertical Space 數值。
 - **Measurement Status** 回報量測值是否存在；fallback ratio 與其他 diagnostics 放在 **Trace Sheet**。
 - **Result View** 與 **Result Image** 顯示正式量測，不顯示 ROI 或 debug internals。
+- **P-Chart** 依 **Group** 與量測類型比較 successful final measurements 的常態機率分布。
 - **Debug View** 與 **Debug Image** 顯示演算法內部資訊，也可以顯示 ROI。
 - **Trace Sheet** 儲存不適合放在主 Measurements sheet 的次要量測脈絡。
 - 一個 **Group** 包含一張或多張圖片，每張圖片剛好屬於一個 **Group**。
@@ -126,3 +131,4 @@ _避免使用_: tag, class, folder
 - 「ROI result」容易誤導。決議：**ROI** 只限制 **Analysis Region**；輸出依 image 與 Group 組織。
 - 「Overlay」、「Annotated Image」與「Details」作為 UI/export 名稱太模糊。決議：使用 **Result View**、**Result Image** 與 **Trace Sheet**。
 - 「success」可能代表可報告值，也可能代表診斷品質高。決議：**Measurement Status** `success` 代表有可報告值；即使 boundary 大量使用 fallback 仍是 `success`，diagnostics 放在 **Trace Sheet**。
+- 「P-Chart」在一般統計中可能指 proportion control chart。決議：Measurer 中的 **P-Chart** 固定代表 normal probability plot view。

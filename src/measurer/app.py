@@ -55,6 +55,13 @@ from measurer.measurement_report import (
     format_measurement_summary,
     successful_measurement_report_items,
 )
+from measurer.probability_plot import (
+    ProbabilityPlotPoint,
+    format_probability_plot_summary,
+    normal_probability_score,
+    probability_plot_buckets,
+    probability_plot_points,
+)
 from measurer.roi import PolygonRoi, RectRoi, RoiSelection, roi_union_area_px
 
 MEASUREMENT_COLORS = {
@@ -76,6 +83,8 @@ class ImageCanvas(QWidget):
         self._measurement_nm_per_px: float | None = None
         self._box_plot_points: list[BoxPlotPoint] | None = None
         self._box_plot_warning = ""
+        self._probability_plot_points: list[ProbabilityPlotPoint] | None = None
+        self._probability_plot_warning = ""
         self._drag_start: QPoint | None = None
         self._drag_current: QPoint | None = None
         self._polygon_points: list[QPoint] = []
@@ -88,6 +97,8 @@ class ImageCanvas(QWidget):
         self._pixmap = pixmap
         self._box_plot_points = None
         self._box_plot_warning = ""
+        self._probability_plot_points = None
+        self._probability_plot_warning = ""
         self._drag_start = None
         self._drag_current = None
         self._polygon_points = []
@@ -125,6 +136,22 @@ class ImageCanvas(QWidget):
         self._show_roi = False
         self._box_plot_points = points
         self._box_plot_warning = warning
+        self._probability_plot_points = None
+        self._probability_plot_warning = ""
+        self.update()
+
+    def set_probability_plot(
+        self, points: list[ProbabilityPlotPoint], warning: str
+    ) -> None:
+        self._pixmap = None
+        self._measurement_result = None
+        self._measurement_nm_per_px = None
+        self._roi = RoiSelection()
+        self._show_roi = False
+        self._box_plot_points = None
+        self._box_plot_warning = ""
+        self._probability_plot_points = points
+        self._probability_plot_warning = warning
         self.update()
 
     def roi_preview(self) -> RectRoi | None:
@@ -142,6 +169,13 @@ class ImageCanvas(QWidget):
 
         if self._box_plot_points is not None:
             self._draw_box_plot(painter, self._box_plot_points, self._box_plot_warning)
+            return
+        if self._probability_plot_points is not None:
+            self._draw_probability_plot(
+                painter,
+                self._probability_plot_points,
+                self._probability_plot_warning,
+            )
             return
 
         if self._pixmap is None or self._pixmap.isNull():
@@ -474,6 +508,122 @@ class ImageCanvas(QWidget):
                 type_label,
             )
 
+    def _draw_probability_plot(
+        self, painter: QPainter, points: list[ProbabilityPlotPoint], warning: str
+    ) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if warning or not points:
+            painter.setPen(QPen(QColor(230, 235, 242), 1))
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                warning or "P-Chart: no measured data.",
+            )
+            return
+
+        buckets = probability_plot_buckets(points)
+        probability_ticks = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        min_score = normal_probability_score(probability_ticks[0])
+        max_score = normal_probability_score(probability_ticks[-1])
+        metrics = painter.fontMetrics()
+        tick_label_width = max(
+            metrics.horizontalAdvance(f"{tick}%") for tick in probability_ticks
+        )
+        left = max(64, tick_label_width + 24)
+        top = 32
+        right = self.width() - 28
+        bottom = self.height() - 78
+        if right <= left or bottom <= top:
+            return
+
+        for tick in probability_ticks:
+            y = _probability_plot_y(tick, min_score, max_score, top, bottom)
+            label = f"{tick}%"
+            painter.setPen(QPen(QColor(43, 51, 63), 1))
+            painter.drawLine(left, y, right, y)
+            painter.setPen(QPen(QColor(188, 196, 208), 1))
+            painter.drawLine(left - 5, y, left, y)
+            painter.drawText(
+                left - 10 - metrics.horizontalAdvance(label),
+                y + metrics.ascent() // 2 - 2,
+                label,
+            )
+
+        painter.setPen(QPen(QColor(94, 104, 118), 1))
+        painter.drawLine(left, bottom, right, bottom)
+        painter.drawLine(left, top, left, bottom)
+
+        ranges_by_type = _probability_plot_ranges_by_type(points)
+        bucket_count = len(buckets)
+        bucket_width = (right - left) / max(1, bucket_count)
+        for bucket_index, bucket in enumerate(buckets):
+            group, measurement_type = bucket.key
+            bucket_left = left + bucket_width * bucket_index
+            bucket_right = left + bucket_width * (bucket_index + 1)
+            center_x = round((bucket_left + bucket_right) / 2)
+            color = MEASUREMENT_COLORS[measurement_type]
+            value_min, value_max = ranges_by_type[measurement_type]
+
+            if bucket.drawable:
+                chart_points = [
+                    QPoint(
+                        _probability_plot_x(
+                            point.value,
+                            value_min,
+                            value_max,
+                            round(bucket_left + 12),
+                            round(bucket_right - 12),
+                        ),
+                        _probability_plot_y(
+                            point.probability_percent,
+                            min_score,
+                            max_score,
+                            top,
+                            bottom,
+                        ),
+                    )
+                    for point in bucket.points
+                ]
+                painter.setPen(QPen(color, 2))
+                for start, end in zip(chart_points, chart_points[1:], strict=False):
+                    painter.drawLine(start, end)
+                painter.setBrush(color)
+                for point in chart_points:
+                    painter.drawEllipse(point.x() - 3, point.y() - 3, 6, 6)
+            else:
+                painter.setPen(QPen(QColor(145, 153, 166), 1))
+                insufficient_label = _elided_center_label(
+                    metrics, "insufficient", round(bucket_width) - 12
+                )
+                painter.drawText(
+                    center_x - metrics.horizontalAdvance(insufficient_label) // 2,
+                    round((top + bottom) / 2),
+                    insufficient_label,
+                )
+
+            painter.setPen(QPen(QColor(220, 226, 235), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            group_label = _elided_center_label(metrics, group, round(bucket_width) - 12)
+            painter.drawText(
+                center_x - metrics.horizontalAdvance(group_label) // 2,
+                bottom + 28,
+                group_label,
+            )
+
+        for measurement_type, start_index, end_index in box_plot_label_clusters(
+            [(bucket.key, []) for bucket in buckets]
+        ):
+            cluster_left = left + bucket_width * start_index
+            cluster_right = left + bucket_width * (end_index + 1)
+            cluster_center_x = round((cluster_left + cluster_right) / 2)
+            max_label_width = round(cluster_right - cluster_left) - 12
+            type_label = _elided_center_label(metrics, measurement_type, max_label_width)
+            painter.drawText(
+                cluster_center_x - metrics.horizontalAdvance(type_label) // 2,
+                bottom + 52,
+                type_label,
+            )
+
 
 def _rect_roi_from_points(start: QPoint, end: QPoint) -> RectRoi:
     left = min(start.x(), end.x())
@@ -530,6 +680,9 @@ class MeasurerWindow(QMainWindow):
         self.box_plot_view_button = QPushButton("Box Plot")
         self.box_plot_view_button.setCheckable(True)
         self.box_plot_view_button.clicked.connect(self._show_box_plot_view)
+        self.p_chart_view_button = QPushButton("P-Chart")
+        self.p_chart_view_button.setCheckable(True)
+        self.p_chart_view_button.clicked.connect(self._show_p_chart_view)
         self.debug_view_button = QPushButton("Debug")
         self.debug_view_button.setCheckable(True)
         self.debug_view_button.clicked.connect(self._show_debug_view)
@@ -626,6 +779,7 @@ class MeasurerWindow(QMainWindow):
         view_controls.addWidget(self.original_view_button)
         view_controls.addWidget(self.result_view_button)
         view_controls.addWidget(self.box_plot_view_button)
+        view_controls.addWidget(self.p_chart_view_button)
         view_controls.addWidget(self.debug_view_button)
         view_controls.addStretch(1)
 
@@ -765,6 +919,8 @@ class MeasurerWindow(QMainWindow):
             self.status_label.setText("Group updated.")
             if self.current_view_mode == "Box Plot":
                 self._show_box_plot_view()
+            elif self.current_view_mode == "P-Chart":
+                self._show_p_chart_view()
         else:
             self.status_label.setText("Group name cannot be empty.")
 
@@ -782,6 +938,8 @@ class MeasurerWindow(QMainWindow):
             self._show_result_view()
         elif self.current_view_mode == "Box Plot":
             self._show_box_plot_view()
+        elif self.current_view_mode == "P-Chart":
+            self._show_p_chart_view()
 
     def _clear_selected_roi(self) -> None:
         row_index = self.file_table.currentRow()
@@ -916,6 +1074,15 @@ class MeasurerWindow(QMainWindow):
         self.current_view_mode = "Box Plot"
         self._sync_view_buttons()
 
+    def _show_p_chart_view(self) -> None:
+        points, warning = probability_plot_points(
+            self.queue, self._selected_box_plot_measurement_types()
+        )
+        self.image_label.set_probability_plot(points, warning)
+        self.result_values_label.setText(format_probability_plot_summary(points, warning))
+        self.current_view_mode = "P-Chart"
+        self._sync_view_buttons()
+
     def _set_all_box_plot_measurement_types(self, checked: bool) -> None:
         for checkbox in self.box_plot_type_checkboxes.values():
             with QSignalBlocker(checkbox):
@@ -934,6 +1101,8 @@ class MeasurerWindow(QMainWindow):
     def _refresh_box_plot_view_from_filters(self) -> None:
         if self.current_view_mode == "Box Plot":
             self._show_box_plot_view()
+        elif self.current_view_mode == "P-Chart":
+            self._show_p_chart_view()
 
     def _selected_box_plot_measurement_types(self) -> set[str]:
         return {
@@ -1002,12 +1171,15 @@ class MeasurerWindow(QMainWindow):
             "Original View": self.original_view_button,
             "Result View": self.result_view_button,
             "Box Plot": self.box_plot_view_button,
+            "P-Chart": self.p_chart_view_button,
             "Debug View": self.debug_view_button,
         }
         for mode, button in view_buttons.items():
             with QSignalBlocker(button):
                 button.setChecked(mode == self.current_view_mode)
-        self.box_plot_filter_panel.setVisible(self.current_view_mode == "Box Plot")
+        self.box_plot_filter_panel.setVisible(
+            self.current_view_mode in {"Box Plot", "P-Chart"}
+        )
 
     def _sync_roi_mode_buttons(self, mode: str) -> None:
         with QSignalBlocker(self.rectangle_roi_mode_button):
@@ -1200,6 +1372,43 @@ def _elided_center_label(metrics, text: str, max_width: int) -> str:
     if max_width <= 0:
         return ""
     return metrics.elidedText(text, Qt.TextElideMode.ElideRight, max_width)
+
+
+def _probability_plot_ranges_by_type(
+    points: list[ProbabilityPlotPoint],
+) -> dict[str, tuple[float, float]]:
+    values_by_type: dict[str, list[float]] = {}
+    for point in points:
+        values_by_type.setdefault(point.measurement_type, []).append(point.value)
+
+    ranges = {}
+    for measurement_type, values in values_by_type.items():
+        minimum = min(values)
+        maximum = max(values)
+        if minimum == maximum:
+            minimum -= 1
+            maximum += 1
+        ranges[measurement_type] = (minimum, maximum)
+    return ranges
+
+
+def _probability_plot_x(
+    value: float, min_value: float, max_value: float, left: int, right: int
+) -> int:
+    fraction = (value - min_value) / (max_value - min_value)
+    return round(left + fraction * (right - left))
+
+
+def _probability_plot_y(
+    probability_percent: float,
+    min_score: float,
+    max_score: float,
+    top: int,
+    bottom: int,
+) -> int:
+    score = normal_probability_score(probability_percent)
+    fraction = (score - min_score) / (max_score - min_score)
+    return round(bottom - fraction * (bottom - top))
 
 
 def _format_debug_values(result: MeasurementResult) -> str:
