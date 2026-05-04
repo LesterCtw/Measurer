@@ -1,5 +1,5 @@
-# Use Simple MVS State and Export Rules
+# 使用簡單的 MVS 狀態與 Export 規則
 
-Measurer's MVS will keep image state, measurement status, and export behavior intentionally simple: only images with at least one successful final measurement are `Measured`, ROI changes delete old measurement results instead of keeping stale results, and Export only writes `Measured` images. Pending and Failed images stay visible in the GUI but do not produce Result Images, Debug Images, or Excel rows, while diagnostic quality indicators such as fallback ratio stay in the Trace Sheet for produced final measurements.
+Measurer 的 MVS 會刻意讓 image state、measurement status 與 export 行為保持簡單：只有至少有一筆 successful final measurement 的圖片才是 `Measured`；ROI 改變時直接刪除舊 measurement results，不保留 stale results；Export 只輸出 `Measured` 圖片。Pending 與 Failed 圖片仍會留在 GUI 中，但不產生 Result Images、Debug Images 或 Excel rows；fallback ratio 這類 diagnostic quality indicators 則放在已產生 final measurements 的 Trace Sheet。
 
-This favors a predictable guided workflow over complex recovery, stale-result handling, or partial export management. The trade-off is that failed image reasons are not preserved in exported Excel and skipped files are reported through GUI summaries rather than detailed exported logs, but the exported artifacts remain clean and easier for engineers to interpret.
+這個做法優先選擇可預期的 guided workflow，而不是複雜的 recovery、stale-result handling 或 partial export management。取捨是 failed image reasons 不會保存在匯出的 Excel，skipped files 也只透過 GUI summaries 回報，不會輸出詳細 logs；好處是 export artifacts 保持乾淨，工程師比較容易解讀。
