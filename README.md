@@ -16,7 +16,7 @@ Domain language 記錄在 `CONTEXT.md`，用來固定工程師與開發之間對
 assets/icons/measurer.ico
 ```
 
-`assets/icons/measurer.png` 是同一個 icon 的 PNG 版本，方便 README、installer 或其他包裝流程預覽使用。這個 icon 使用 Aligner / Denoiser / Measurer 共用的深色圓角 icon 風格，僅保留中央產品首字母，不放底部 wordmark。Windows 打包流程必須把 icon 參數指向 `assets/icons/measurer.ico`，確保打包後的 exe / shortcut 顯示 Measurer 品牌 icon。
+`assets/icons/measurer.png` 是同一個 icon 的 PNG 版本，方便 README、installer 或其他包裝流程預覽使用。這個 icon 使用 Aligner / Denoiser / Measurer 共用的深色圓角 icon 風格，僅保留置中的產品首字母，不放底部 wordmark。Windows 打包流程必須把 icon 參數指向 `assets/icons/measurer.ico`，確保打包後的 exe / shortcut 顯示 Measurer 品牌 icon。
 
 ## 目前已實作
 
