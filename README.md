@@ -41,9 +41,11 @@ assets/icons/measurer.ico
 - incomplete polygon drawing 不會加入 ROI Union，也不會影響 Measure Current。
 - Original / Debug workspace 會顯示既有 ROI；拖選 rectangle 或繪製 polygon 時會顯示 cyan outline，不用實心色塊蓋住影像。
 - Image workspace 會等比例 fit 影像，不讓大型原始影像的 pixmap size 撐壞視窗比例。
+- Original preview、Result Image 與 Debug Image 共用同一套 grayscale display normalization，避免 GUI 預覽與匯出圖片亮度轉換規則分歧。
 - Undo ROI 會移除最近完成的 ROI Shape，不論是 rectangle 或 polygon；Undo 到沒有 ROI Shapes 時回到 Full image。
 - Clear ROI 會回到 Full image。
 - ROI geometry 會 clamp 在 image bounds 內。
+- ROI Union 幾何規則集中在獨立 module，Image Queue、Measure Current、Result / Debug display 與 Export 共用同一套 rectangle / polygon ROI Shape clamp、bounding box、mask 與 area 計算。
 - ROI 改變、Undo ROI 或 Clear ROI 會刪除 stale measurement results，Measure 回到 `Pending`，Export 回到 `Not exported`。
 - Measure Current 支援 clean synthetic STEM ZC Image 中多個 bright Metal Islands on dark LK 的 tracer bullet。
 - Measure Current 只量測目前選取圖片，不自動切下一張，也不直接寫 output files。
@@ -71,9 +73,11 @@ assets/icons/measurer.ico
 - Result View 的 Measurement Lines / values 由 canvas 依目前顯示尺寸繪製，不把文字先畫進原始影像 pixmap 再放大。
 - Result View 下方 summary 依 measurement type 彙整 value range 與 count，避免多 Metal Islands 時把每一筆完整名稱串成難讀長句。
 - Result View 使用固定 measurement type 顏色：TCD cyan、BCD orange、Height yellow、Horizontal Space magenta、Vertical Space lime。
+- Result View、Box Plot preview 與 Export 目前共用同一組 measurement type 順序、target ID 解析、scale label、summary 與顏色定義，避免 GUI 與匯出結果對 TCD / BCD / Height / Horizontal Space / Vertical Space 的呈現規則分歧。
 - Result View 數值文字顯示在線段中心附近，使用白字加 dark outline，會 clamp 在 image bounds 內，並用固定上下偏移減少局部碰撞；若仍重疊，不讓 rendering failed。
 - batch manual default 或單張 manual override 改變後，Result View 會用現有 px geometry 重新換算顯示值與單位，不需要重測。
 - Box Plot preview 已可從 GUI 切換，會依 Group 與 measurement type 彙整 successful final measurements，使用 canvas 依目前顯示尺寸繪製 raw points with jitter、左側 y-axis 刻度與 summary/status panel；x-axis 先依 measurement type 分群，再在群內並排各 Group 方便比較。
+- Box Plot preview 的資料點整理、unit 混用檢查、bucket 排序、摘要文字與 percentile/tick 計算集中在獨立 module；GUI 只負責依這些結果繪製畫面。
 - Box Plot preview 提供 All 與 TCD / BCD / Height / Horizontal Space / Vertical Space checkbox，可只顯示勾選的 measurement types；切換 checkbox 會用現有 results 立即刷新，不需要重測。
 - Group、batch manual default 或單張 manual override 改變後，Box Plot preview 會重新聚合現有 measurement results，不需要重測。
 - Box Plot preview 不混合 nm 與 px；同時存在 nm 與 px measurement results 時，顯示 warning 而不畫 mixed-unit plot。

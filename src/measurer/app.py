@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import sys
 from pathlib import Path
 
@@ -28,46 +27,39 @@ from PySide6.QtWidgets import (
 )
 
 from measurer.app_icon import load_application_icon
+from measurer.box_plot import (
+    BoxPlotPoint,
+    box_plot_buckets,
+    box_plot_label_clusters,
+    box_plot_points,
+    box_plot_ticks,
+    box_plot_y,
+    format_box_plot_summary,
+    percentile,
+)
 from measurer.export import OverwriteSummary, export_measured_batch
+from measurer.image_display import normalize_to_uint8
 from measurer.image_queue import (
     AddImagesSummary,
     ImageQueue,
-    PolygonRoi,
-    RectRoi,
-    RoiSelection,
 )
-from measurer.image_queue import roi_union_area_px
 from measurer.measurement import (
     HARD_MIN_COMPONENT_AREA_PX,
-    Measurement,
     MeasurementResult,
     measure_image,
 )
-
-
-MEASUREMENT_TYPE_ORDER = [
-    "TCD",
-    "BCD",
-    "Height",
-    "Horizontal Space",
-    "Vertical Space",
-]
+from measurer.measurement_report import (
+    MEASUREMENT_TYPE_COLORS,
+    MEASUREMENT_TYPE_ORDER,
+    format_measurement_summary,
+    successful_measurement_report_items,
+)
+from measurer.roi import PolygonRoi, RectRoi, RoiSelection, roi_union_area_px
 
 MEASUREMENT_COLORS = {
-    "TCD": QColor(64, 196, 255),
-    "BCD": QColor(255, 183, 77),
-    "Height": QColor(255, 210, 64),
-    "Horizontal Space": QColor(186, 104, 200),
-    "Vertical Space": QColor(129, 199, 132),
+    measurement_type: QColor(*rgb)
+    for measurement_type, rgb in MEASUREMENT_TYPE_COLORS.items()
 }
-
-
-@dataclass(frozen=True)
-class BoxPlotPoint:
-    group: str
-    measurement_type: str
-    value: float
-    unit: str
 
 
 class ImageCanvas(QWidget):
@@ -346,16 +338,12 @@ class ImageCanvas(QWidget):
     def _draw_measurement_overlay(
         self, painter: QPainter, result: MeasurementResult
     ) -> None:
-        unit = "px" if self._measurement_nm_per_px is None else "nm"
-        scale = 1.0 if self._measurement_nm_per_px is None else self._measurement_nm_per_px
         placed_label_rects: list[QRect] = []
-        for measurement in result.measurements.values():
-            if measurement.status != "success":
-                continue
-            measurement_type = _measurement_type(measurement)
-            if measurement_type is None:
-                continue
-            color = MEASUREMENT_COLORS[measurement_type]
+        for item in successful_measurement_report_items(
+            result, self._measurement_nm_per_px
+        ):
+            measurement = item.measurement
+            color = QColor(*item.color_rgb)
             start = self._image_to_widget_point(
                 measurement.line.start.x, measurement.line.start.y
             )
@@ -365,10 +353,9 @@ class ImageCanvas(QWidget):
             painter.setPen(QPen(color, 2))
             painter.drawLine(start, end)
 
-            label = f"{measurement.value_px * scale:.1f} {unit}"
             label_rect = _result_label_rect(
                 painter=painter,
-                text=label,
+                text=item.label,
                 center_x=round((start.x() + end.x()) / 2),
                 center_y=round((start.y() + end.y()) / 2),
                 image_width=self.width(),
@@ -376,7 +363,7 @@ class ImageCanvas(QWidget):
                 placed_rects=placed_label_rects,
             )
             placed_label_rects.append(label_rect)
-            _draw_outlined_text(painter, label_rect, label)
+            _draw_outlined_text(painter, label_rect, item.label)
 
     def _image_to_widget_point(self, x: int, y: int) -> QPoint:
         image_rect = self._image_rect()
@@ -407,7 +394,7 @@ class ImageCanvas(QWidget):
             min_value -= 1
             max_value += 1
 
-        ticks = _box_plot_ticks(min_value, max_value)
+        ticks = box_plot_ticks(min_value, max_value)
         metrics = painter.fontMetrics()
         tick_label_width = max(
             metrics.horizontalAdvance(f"{tick:.1f}") for tick in ticks
@@ -420,7 +407,7 @@ class ImageCanvas(QWidget):
             return
 
         for tick in ticks:
-            y = _box_plot_y(tick, min_value, max_value, top, bottom)
+            y = box_plot_y(tick, min_value, max_value, top, bottom)
             label = f"{tick:.1f}"
             painter.setPen(QPen(QColor(43, 51, 63), 1))
             painter.drawLine(left, y, right, y)
@@ -436,7 +423,7 @@ class ImageCanvas(QWidget):
         painter.drawLine(left, bottom, right, bottom)
         painter.drawLine(left, top, left, bottom)
 
-        buckets = _box_plot_buckets(points)
+        buckets = box_plot_buckets(points)
         bucket_count = len(buckets)
         bucket_width = (right - left) / max(1, bucket_count)
         for bucket_index, ((group, measurement_type), bucket_values) in enumerate(buckets):
@@ -445,14 +432,14 @@ class ImageCanvas(QWidget):
             sorted_values = sorted(bucket_values)
             low = sorted_values[0]
             high = sorted_values[-1]
-            q1 = _percentile(sorted_values, 25)
-            median = _percentile(sorted_values, 50)
-            q3 = _percentile(sorted_values, 75)
-            low_y = _box_plot_y(low, min_value, max_value, top, bottom)
-            high_y = _box_plot_y(high, min_value, max_value, top, bottom)
-            q1_y = _box_plot_y(q1, min_value, max_value, top, bottom)
-            median_y = _box_plot_y(median, min_value, max_value, top, bottom)
-            q3_y = _box_plot_y(q3, min_value, max_value, top, bottom)
+            q1 = percentile(sorted_values, 25)
+            median = percentile(sorted_values, 50)
+            q3 = percentile(sorted_values, 75)
+            low_y = box_plot_y(low, min_value, max_value, top, bottom)
+            high_y = box_plot_y(high, min_value, max_value, top, bottom)
+            q1_y = box_plot_y(q1, min_value, max_value, top, bottom)
+            median_y = box_plot_y(median, min_value, max_value, top, bottom)
+            q3_y = box_plot_y(q3, min_value, max_value, top, bottom)
 
             painter.setPen(QPen(color, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -462,7 +449,7 @@ class ImageCanvas(QWidget):
             painter.setBrush(color)
             for point_index, value in enumerate(bucket_values):
                 jitter = ((point_index % 5) - 2) * 4
-                y = _box_plot_y(value, min_value, max_value, top, bottom)
+                y = box_plot_y(value, min_value, max_value, top, bottom)
                 painter.drawEllipse(center_x + jitter - 2, y - 2, 4, 4)
 
             painter.setPen(QPen(QColor(220, 226, 235), 1))
@@ -474,7 +461,7 @@ class ImageCanvas(QWidget):
                 group_label,
             )
 
-        for measurement_type, start_index, end_index in _box_plot_label_clusters(buckets):
+        for measurement_type, start_index, end_index in box_plot_label_clusters(buckets):
             cluster_left = left + bucket_width * start_index
             cluster_right = left + bucket_width * (end_index + 1)
             cluster_center_x = round((cluster_left + cluster_right) / 2)
@@ -920,11 +907,11 @@ class MeasurerWindow(QMainWindow):
         self._sync_view_buttons()
 
     def _show_box_plot_view(self) -> None:
-        points, warning = _box_plot_points(
+        points, warning = box_plot_points(
             self.queue, self._selected_box_plot_measurement_types()
         )
         self.image_label.set_box_plot(points, warning)
-        self.result_values_label.setText(_format_box_plot_summary(points, warning))
+        self.result_values_label.setText(format_box_plot_summary(points, warning))
         self.current_view_mode = "Box Plot"
         self._sync_view_buttons()
 
@@ -1101,7 +1088,7 @@ def _roi_is_too_small(roi: RoiSelection, image: np.ndarray) -> bool:
 
 
 def _array_to_pixmap(image: np.ndarray) -> QPixmap:
-    display = _normalize_to_uint8(image)
+    display = normalize_to_uint8(image)
     height, width = display.shape
     bytes_per_line = display.strides[0]
     qimage = QImage(
@@ -1175,7 +1162,7 @@ def _draw_outlined_text(painter: QPainter, label_rect: QRect, text: str) -> None
 
 
 def _debug_to_pixmap(image: np.ndarray, result: MeasurementResult) -> QPixmap:
-    display = _normalize_to_uint8(image)
+    display = normalize_to_uint8(image)
     height, width = display.shape
     rgb = np.ascontiguousarray(np.dstack([display, display, display]))
     if result.detection is not None:
@@ -1258,33 +1245,7 @@ def _draw_component_boxes(
 def _format_result_values(
     result: MeasurementResult, nm_per_px: float | None
 ) -> str:
-    unit = "px" if nm_per_px is None else "nm"
-    scale = 1.0 if nm_per_px is None else nm_per_px
-    values_by_type: dict[str, list[float]] = {
-        measurement_type: [] for measurement_type in MEASUREMENT_TYPE_ORDER
-    }
-    for measurement in result.measurements.values():
-        if measurement.status != "success":
-            continue
-        measurement_type = _measurement_type(measurement)
-        if measurement_type is None:
-            continue
-        values_by_type[measurement_type].append(measurement.value_px * scale)
-
-    parts = []
-    for measurement_type in MEASUREMENT_TYPE_ORDER:
-        values = values_by_type[measurement_type]
-        if not values:
-            continue
-        minimum = min(values)
-        maximum = max(values)
-        value_label = (
-            f"{minimum:.1f}"
-            if minimum == maximum
-            else f"{minimum:.1f}-{maximum:.1f}"
-        )
-        parts.append(f"{measurement_type}: {value_label} {unit} (n={len(values)})")
-    return " | ".join(parts)
+    return format_measurement_summary(result, nm_per_px)
 
 
 def _format_overwrite_dialog_text(summary: OverwriteSummary) -> str:
@@ -1313,146 +1274,10 @@ def _pluralize(count: int, singular: str) -> str:
     return singular if count == 1 else f"{singular}s"
 
 
-def _box_plot_points(
-    queue: ImageQueue, selected_measurement_types: set[str] | None = None
-) -> tuple[list[BoxPlotPoint], str]:
-    if selected_measurement_types is not None and not selected_measurement_types:
-        return [], "Box Plot: no selected measurement types."
-
-    points: list[BoxPlotPoint] = []
-    units: set[str] = set()
-    for row_index, row in enumerate(queue.rows):
-        if row.measure_status != "Measured":
-            continue
-        if not isinstance(row.measurement_results, MeasurementResult):
-            continue
-
-        scale_resolution = queue.resolve_scale(row_index)
-        unit = "px" if scale_resolution.nm_per_px is None else "nm"
-        scale = 1.0 if scale_resolution.nm_per_px is None else scale_resolution.nm_per_px
-        row_has_visible_measurement = False
-        for measurement in row.measurement_results.measurements.values():
-            if measurement.status != "success":
-                continue
-            measurement_type = _measurement_type(measurement)
-            if measurement_type is None:
-                continue
-            if (
-                selected_measurement_types is not None
-                and measurement_type not in selected_measurement_types
-            ):
-                continue
-            row_has_visible_measurement = True
-            points.append(
-                BoxPlotPoint(
-                    group=row.group,
-                    measurement_type=measurement_type,
-                    value=measurement.value_px * scale,
-                    unit=unit,
-                )
-            )
-        if row_has_visible_measurement:
-            units.add(unit)
-
-    if len(units) > 1:
-        return points, "Box Plot cannot mix nm and px measurements."
-    return points, ""
-
-
-def _measurement_type(measurement: Measurement) -> str | None:
-    for measurement_type in sorted(MEASUREMENT_TYPE_ORDER, key=len, reverse=True):
-        if measurement.name.endswith(measurement_type):
-            return measurement_type
-    return None
-
-
-def _format_box_plot_summary(points: list[BoxPlotPoint], warning: str) -> str:
-    if warning:
-        return warning
-    if not points:
-        return "Box Plot: no measured data."
-
-    groups = ", ".join(sorted({point.group for point in points}))
-    types = ", ".join(
-        measurement_type
-        for measurement_type in MEASUREMENT_TYPE_ORDER
-        if any(point.measurement_type == measurement_type for point in points)
-    )
-    unit = points[0].unit
-    count = len(points)
-    label = "measurement" if count == 1 else "measurements"
-    return (
-        f"Box Plot: {count} {label} | Unit: {unit} | "
-        f"Groups: {groups} | Types: {types}"
-    )
-
-
-def _box_plot_buckets(
-    points: list[BoxPlotPoint],
-) -> list[tuple[tuple[str, str], list[float]]]:
-    grouped: dict[tuple[str, str], list[float]] = {}
-    for point in points:
-        grouped.setdefault((point.group, point.measurement_type), []).append(point.value)
-    return sorted(
-        grouped.items(),
-        key=lambda item: (
-            MEASUREMENT_TYPE_ORDER.index(item[0][1]),
-            item[0][0],
-        ),
-    )
-
-
-def _box_plot_label_clusters(
-    buckets: list[tuple[tuple[str, str], list[float]]],
-) -> list[tuple[str, int, int]]:
-    clusters: list[tuple[str, int, int]] = []
-    if not buckets:
-        return clusters
-
-    current_type = buckets[0][0][1]
-    start_index = 0
-    for index, ((_group, measurement_type), _values) in enumerate(buckets[1:], start=1):
-        if measurement_type == current_type:
-            continue
-        clusters.append((current_type, start_index, index - 1))
-        current_type = measurement_type
-        start_index = index
-    clusters.append((current_type, start_index, len(buckets) - 1))
-    return clusters
-
-
-def _box_plot_y(
-    value: float, min_value: float, max_value: float, top: int, bottom: int
-) -> int:
-    fraction = (value - min_value) / (max_value - min_value)
-    return round(bottom - fraction * (bottom - top))
-
-
-def _box_plot_ticks(
-    min_value: float, max_value: float, tick_count: int = 5
-) -> list[float]:
-    if tick_count <= 1:
-        return [min_value]
-    step = (max_value - min_value) / (tick_count - 1)
-    return [min_value + step * index for index in range(tick_count)]
-
-
 def _elided_center_label(metrics, text: str, max_width: int) -> str:
     if max_width <= 0:
         return ""
     return metrics.elidedText(text, Qt.TextElideMode.ElideRight, max_width)
-
-
-def _percentile(sorted_values: list[float], percentile: float) -> float:
-    if len(sorted_values) == 1:
-        return sorted_values[0]
-    position = (len(sorted_values) - 1) * percentile / 100
-    lower = int(np.floor(position))
-    upper = int(np.ceil(position))
-    if lower == upper:
-        return sorted_values[lower]
-    weight = position - lower
-    return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
 
 def _format_debug_values(result: MeasurementResult) -> str:
@@ -1492,16 +1317,6 @@ def _format_debug_values(result: MeasurementResult) -> str:
             f"Fallback ratio: {fallback_ratio * 100:.1f}%",
         ]
     )
-
-
-def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
-    if image.dtype == np.uint8:
-        return np.ascontiguousarray(image)
-    max_value = float(np.max(image))
-    if max_value <= 0:
-        return np.zeros(image.shape, dtype=np.uint8)
-    scaled = np.asarray(image, dtype=np.float32) / max_value * 255
-    return np.ascontiguousarray(np.rint(scaled).astype(np.uint8))
 
 
 def _stylesheet() -> str:
