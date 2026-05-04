@@ -37,6 +37,7 @@ from measurer.box_plot import (
     format_box_plot_summary,
     percentile,
 )
+from measurer.debug_render import debug_view_qimage
 from measurer.export import OverwriteSummary, export_measured_batch
 from measurer.image_display import normalize_to_uint8
 from measurer.image_queue import (
@@ -952,7 +953,9 @@ class MeasurerWindow(QMainWindow):
             self._sync_view_buttons()
             return
 
-        self.image_label.setPixmap(_debug_to_pixmap(row.image, row.measurement_debug))
+        self.image_label.setPixmap(
+            QPixmap.fromImage(debug_view_qimage(row.image, row.measurement_debug))
+        )
         self.image_label.set_measurement_overlay(None, None)
         self.image_label.set_roi(row.roi, visible=True)
         self.result_values_label.setText(_format_debug_values(row.measurement_debug))
@@ -1159,87 +1162,6 @@ def _draw_outlined_text(painter: QPainter, label_rect: QRect, text: str) -> None
         painter.drawText(baseline_x + dx, baseline_y + dy, text)
     painter.setPen(QPen(QColor(245, 248, 252), 1))
     painter.drawText(baseline_x, baseline_y, text)
-
-
-def _debug_to_pixmap(image: np.ndarray, result: MeasurementResult) -> QPixmap:
-    display = normalize_to_uint8(image)
-    height, width = display.shape
-    rgb = np.ascontiguousarray(np.dstack([display, display, display]))
-    if result.detection is not None:
-        region = result.analysis_region
-        rough_mask = result.detection.rough_mask
-        region_rgb = rgb[
-            region.y : region.y + region.height,
-            region.x : region.x + region.width,
-        ]
-        region_rgb[rough_mask] = (
-            region_rgb[rough_mask].astype(np.uint16) // 2
-            + np.asarray([24, 96, 180], dtype=np.uint16)
-        ).astype(np.uint8)
-
-    qimage = QImage(
-        rgb.data,
-        width,
-        height,
-        width * 3,
-        QImage.Format.Format_RGB888,
-    ).copy()
-    painter = QPainter(qimage)
-    if result.detection is not None:
-        _draw_component_boxes(
-            painter,
-            result.analysis_region,
-            result.detection.kept_candidates,
-            QColor(80, 220, 120),
-        )
-        _draw_component_boxes(
-            painter,
-            result.analysis_region,
-            result.detection.excluded_small_components,
-            QColor(255, 190, 64),
-        )
-        _draw_component_boxes(
-            painter,
-            result.analysis_region,
-            result.detection.excluded_boundary_touch_components,
-            QColor(255, 80, 80),
-        )
-    _draw_boundary_points(painter, result)
-    painter.end()
-    return QPixmap.fromImage(qimage)
-
-
-def _draw_boundary_points(painter: QPainter, result: MeasurementResult) -> None:
-    boundaries = (
-        [metal.refined_boundary for metal in result.metal_islands]
-        if result.metal_islands
-        else [result.refined_boundary]
-    )
-    for boundary in boundaries:
-        for point, status in zip(
-            boundary.points,
-            boundary.point_statuses,
-            strict=False,
-        ):
-            if status == "fallback_rough":
-                painter.setPen(QPen(QColor(255, 96, 220), 2))
-            else:
-                painter.setPen(QPen(QColor(120, 240, 255), 2))
-            painter.drawEllipse(point.x - 1, point.y - 1, 3, 3)
-
-
-def _draw_component_boxes(
-    painter, analysis_region: RectRoi, components, color: QColor
-) -> None:
-    painter.setPen(QPen(color, 2))
-    for component in components:
-        min_x, min_y, max_x, max_y = component.bbox
-        painter.drawRect(
-            analysis_region.x + min_x,
-            analysis_region.y + min_y,
-            max_x - min_x + 1,
-            max_y - min_y + 1,
-        )
 
 
 def _format_result_values(

@@ -29,6 +29,7 @@ assets/icons/measurer.ico
 - TIFF 若有一致的 X/Y resolution metadata，會換算成 metadata `nm / pixel`。
 - RGB/RGBA TIFF 直接轉 grayscale，不顯示 warning。
 - multi-page TIFF / unsupported `.dm3` shape / 3D stack / unreadable image data 在 Add Images 時 skip，不加入 queue。
+- TIFF / `.dm3` 讀取、grayscale conversion 與 metadata `nm / pixel` parsing 已集中在 `image_input.py`；`image_queue.py` 只負責 File Queue state、Group、scale、ROI 與 Measure / Export status。
 - Add Images batch summary 顯示 added / skipped 與原因數量。
 - duplicate absolute file path 直接忽略，不重設既有 row。
 - file queue 支援一般點選單列；需要多列 Set Group 時可用 Shift / Cmd / Ctrl 這類系統標準多選手勢。File Queue 不允許直接 double-click 編輯欄位，Group 只能透過 Set Group 控制修改。
@@ -41,7 +42,7 @@ assets/icons/measurer.ico
 - incomplete polygon drawing 不會加入 ROI Union，也不會影響 Measure Current。
 - Original / Debug workspace 會顯示既有 ROI；拖選 rectangle 或繪製 polygon 時會顯示 cyan outline，不用實心色塊蓋住影像。
 - Image workspace 會等比例 fit 影像，不讓大型原始影像的 pixmap size 撐壞視窗比例。
-- Original preview、Result Image 與 Debug Image 共用同一套 grayscale display normalization，避免 GUI 預覽與匯出圖片亮度轉換規則分歧。
+- Original preview、Result Image、Debug View 與 Debug Image 共用同一套 grayscale display normalization，避免 GUI 預覽與匯出圖片亮度轉換規則分歧。
 - Undo ROI 會移除最近完成的 ROI Shape，不論是 rectangle 或 polygon；Undo 到沒有 ROI Shapes 時回到 Full image。
 - Clear ROI 會回到 Full image。
 - ROI geometry 會 clamp 在 image bounds 內。
@@ -74,6 +75,7 @@ assets/icons/measurer.ico
 - Result View 下方 summary 依 measurement type 彙整 value range 與 count，避免多 Metal Islands 時把每一筆完整名稱串成難讀長句。
 - Result View 使用固定 measurement type 顏色：TCD cyan、BCD orange、Height yellow、Horizontal Space magenta、Vertical Space lime。
 - Result View、Box Plot preview 與 Export 目前共用同一組 measurement type 順序、target ID 解析、scale label、summary 與顏色定義，避免 GUI 與匯出結果對 TCD / BCD / Height / Horizontal Space / Vertical Space 的呈現規則分歧。
+- Exported Result Image rendering 已集中在 `result_render.py`；之後若要調整 official Measurement Lines 與 value label 的 QImage rendering，優先改這個 module。
 - Result View 數值文字顯示在線段中心附近，使用白字加 dark outline，會 clamp 在 image bounds 內，並用固定上下偏移減少局部碰撞；若仍重疊，不讓 rendering failed。
 - batch manual default 或單張 manual override 改變後，Result View 會用現有 px geometry 重新換算顯示值與單位，不需要重測。
 - Box Plot preview 已可從 GUI 切換，會依 Group 與 measurement type 彙整 successful final measurements，使用 canvas 依目前顯示尺寸繪製 raw points with jitter、左側 y-axis 刻度與 summary/status panel；x-axis 先依 measurement type 分群，再在群內並排各 Group 方便比較。
@@ -82,6 +84,7 @@ assets/icons/measurer.ico
 - Group、batch manual default 或單張 manual override 改變後，Box Plot preview 會重新聚合現有 measurement results，不需要重測。
 - Box Plot preview 不混合 nm 與 px；同時存在 nm 與 px measurement results 時，顯示 warning 而不畫 mixed-unit plot。
 - Debug View 已有最小 diagnostics：rough mask、kept candidates、excluded small components、excluded boundary-touch components、rejected Space pair count、refined points、fallback points、fallback ratio。
+- Debug View / Debug Image 的 rough mask、candidate boxes 與 Refined Boundary diagnostic rendering 已集中在 `debug_render.py`，避免 GUI 與匯出圖各自維護一套 diagnostic drawing rules。
 - Export button 已支援 single-source / multi-source folder MVS：只輸出 Measured 圖片，Pending / Failed 不輸出圖片也不寫入 Excel。
 - 如果沒有 Measured 圖片，Export 會被阻止，不建立 output folders/files，status card 顯示 `No measured images to export.`。
 - single-source Export 會在原圖資料夾下建立 `measured_image/` 與 `debug_image/`。
@@ -93,6 +96,7 @@ assets/icons/measurer.ico
 - Excel Summary 依 Group、measurement type、unit 彙整 successful measurements，不混合 nm 與 px。
 - Excel Measurements / Trace 只包含 Measured 圖片內產生的 final measurements，並使用 export 當下的 scale state。
 - Excel Trace Sheet 記錄 ROI metadata：Full image 使用 `roi_type = full_image` 與 `roi_shape_count = 0`；一個或多個 ROI Shapes 使用 `roi_type = union`、ROI Union bounding box、以及 completed ROI Shape 數量。
+- Trace Sheet header、ROI Union metadata、scale source 與 Refined Boundary refined/fallback summary 已集中在 `trace_sheet.py`；`export.py` 只負責 workbook / file output orchestration。
 - file queue row 預設顯示：
   - Group = `Default`
   - ROI = `Full image`
@@ -1099,6 +1103,8 @@ Debug View 是工程師排錯用，不是報告用。
 - 下方文字顯示 kept / excluded 類別數量，以及 refined point count / fallback point count / fallback ratio。
 
 Debug Image export 已有 MVS 2x2 panel。完整 export-grade diagnostics 尚未實作。
+
+Debug View / Debug Image 的 diagnostic drawing rules 由 `debug_render.py` 共用；exported Result Image 的 official Measurement Lines rendering 由 `result_render.py` 共用。這樣做的原因是 GUI diagnostic display 與 Export artifact 需要一致；取捨是 PySide6 QImage rendering 相關邏輯會集中在這兩個 module，而不是全部留在 `app.py` 或 `export.py`。
 
 MVS Debug Image 使用 2x2 panel：
 
